@@ -1,0 +1,98 @@
+{
+  "name": "dsh-ob-agent",
+  "description": "Unified Agent control for DeepSeek Harness: gate every agent-class tool behind one composer switch, preset subagents with per-entry persona/permission/model, and let the model author its own agents.",
+  "version": "0.1.4",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "files": [
+    "lib",
+    "docs",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-client-ui-primitives": "*",
+    "@deepseek-ai/dsh-tool-ralph": "*",
+    "@deepseek-ai/dsh-tool-subagent": "*",
+    "@deepseek-ai/dsh-tool-subagent-control": "*",
+    "@deepseek-ai/dsh-tool-workflow": "*",
+    "@deepseek-ai/dsh-workflow-worker-thread": "*",
+    "@deepseek-ai/schemastery": "*",
+    "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-primitives": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-subagent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-subagent-control": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-workflow": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tool-ralph": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-workflow-worker-thread": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "0.1.5-rc.2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.1",
+    "esbuild": "^0.25.0",
+    "react": "^18.2.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.8"
+  }
+}
