@@ -152,7 +152,7 @@ export interface MigrationResult {
  *
  * 规则（只动内置条目，绝不碰用户/模型自建的条目）：
  * 1. 改名的内置标识按 `RENAMED_BUILTINS` 重定向到新标识；
- * 2. v0/1 的同名内置条目取当前出厂值，保留「是否纳入管理」开关；v2 升 v3 时只更新
+ * 2. v0/1 的同名内置条目取当前出厂值，保留「是否纳入管理」开关；v2 及以后版本只更新
  *    代码审查的描述和两段提示词，其余（包括用户调整过的模型、默认勾选）保持不变；
  * 3. 已下线的内置条目从表里移除——它们对应的工具名仍留在闸门拦截名单里，因此不会被意外放行；
  * 4. 设置段里没有的内置条目**不补**：新增的内置角色只随全新安装出现，绝不把用户删掉的条目
@@ -164,7 +164,8 @@ export interface MigrationResult {
 export function migrateSection(section: ObAgentSection): MigrationResult {
   if (section.defaultsRevision >= DEFAULTS_REVISION) return { section, changed: false }
   const fresh = new Map(BUILTIN_ENTRIES.map(entry => [entry.id, entry]))
-  const reviewPromptOnly = section.defaultsRevision === 2
+  // v2 及以后版本已经使用过成本优先版字段；后续版本只更新审查提示词，保留用户的模型与勾选设置。
+  const reviewPromptOnly = section.defaultsRevision >= 2
   const replacementOf = (entry: ObAgentEntry, replacement: ObAgentEntry): ObAgentEntry =>
     reviewPromptOnly && entry.id === 'code_review'
       ? {

@@ -38,7 +38,7 @@ src/
   context-types.ts 所消费服务的结构面（第三方插件不共享 DSH 的 cordis 实例）
   vendor.d.ts      运行期由 profile 解析的 DSH 包的最小声明
   client/          浏览器半：dock（总开关+勾选）、设置页、设置桥、文案、样式
-tests/             152 项单元测试（纯函数层、设置桥、出厂默认迁移）
+tests/             153 项单元测试（纯函数层、设置桥、出厂默认迁移）
 ```
 
 ## 开发

@@ -202,7 +202,7 @@ describe('migrateSection', () => {
     expect(result.section.entries[1]).toEqual(legacySection().entries[3])
   })
 
-  it('第 2 版内置审查提示词升级为成本优先版，自建条目和会话选择保持原样', () => {
+  it('第 2 版及以后内置审查提示词升级为文件改动触发版，自建条目和会话选择保持原样', () => {
     const previous = {
       ...DEFAULT_SECTION,
       defaultsRevision: 2,
@@ -220,12 +220,42 @@ describe('migrateSection', () => {
     const result = migrateSection(previous)
     const review = result.section.entries.find(entry => entry.id === 'code_review')
     expect(result.changed).toBe(true)
-    expect(review?.whenPrompt).toContain('汇报前最多调用一次')
-    expect(review?.identityPrompt).toContain('最小修复')
+    expect(review?.whenPrompt).toContain('每次实际修改文件后都立即调用代码审查（包括代码、配置和文档）')
+    expect(review?.whenPrompt).toContain('本次审查已经提出的建议')
+    expect(review?.identityPrompt).toContain('控制成本')
     expect(review?.defaultEnabled).toBe(true)
     expect(review?.model).toEqual({ provider: 'opencode-go', model: 'hy4-preview', reasoningEffort: 'high' })
     expect(result.section.sessions).toEqual(previous.sessions)
     expect(result.section.entries.find(entry => entry.id === 'general')).toEqual(DEFAULT_SECTION.entries.find(entry => entry.id === 'general'))
+  })
+
+  it('第 3 版审查提示词迁移时保留模型、权限和会话勾选', () => {
+    const previous = {
+      ...DEFAULT_SECTION,
+      defaultsRevision: 3,
+      entries: DEFAULT_SECTION.entries.map(entry => entry.id === 'code_review'
+        ? {
+            ...entry,
+            whenPrompt: '旧的按需审查时机',
+            identityPrompt: '旧身份',
+            model: { provider: 'custom', model: 'reviewer', reasoningEffort: 'high' },
+            defaultEnabled: true,
+            managed: false,
+            permission: 'readonly' as const,
+          }
+        : entry),
+      sessions: { s1: { enabled: true, selected: ['code_review'] } },
+    }
+    const result = migrateSection(previous)
+    const review = result.section.entries.find(entry => entry.id === 'code_review')
+    expect(result.section.defaultsRevision).toBe(DEFAULTS_REVISION)
+    expect(review?.whenPrompt).toContain('每次实际修改文件后都立即调用代码审查（包括代码、配置和文档）')
+    expect(review?.identityPrompt).toContain('控制成本')
+    expect(review?.model).toEqual({ provider: 'custom', model: 'reviewer', reasoningEffort: 'high' })
+    expect(review?.defaultEnabled).toBe(true)
+    expect(review?.managed).toBe(false)
+    expect(review?.permission).toBe('readonly')
+    expect(result.section.sessions).toEqual(previous.sessions)
   })
 
   it('保留用户手改过的「是否纳入管理」开关', () => {
