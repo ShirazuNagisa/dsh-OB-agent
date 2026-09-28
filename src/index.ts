@@ -143,6 +143,7 @@ function readPluginConfig(config: PluginConfig): ObAgentSection {
     readOnlyTools: config.readOnlyTools.get(),
     promptVariables: config.promptVariables.get(),
     autoEnableControlWithContinuable: config.autoEnableControlWithContinuable.get(),
+    childReplyToParent: config.childReplyToParent.get(),
     gate: config.gate.get(),
     authoring: config.authoring.get(),
     modelGuide: config.modelGuide.get(),

@@ -2,9 +2,17 @@
  * 选择解析、闸门匹配与提示段渲染的单元测试（纯函数层，是本插件的语义核心）。
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SECTION } from '../src/defaults.ts'
+import { DEFAULT_SECTION, SECTION_HEADER } from '../src/defaults.ts'
 import { readSection } from '../src/normalize.ts'
-import { createGateMatcher, effectiveSelection, renderSectionText, renderSubagentRoster, resolveActive, sanitizeVariables } from '../src/plan.ts'
+import {
+  childReplyAllowed,
+  createGateMatcher,
+  effectiveSelection,
+  renderSectionText,
+  renderSubagentRoster,
+  resolveActive,
+  sanitizeVariables,
+} from '../src/plan.ts'
 import type { ObAgentSection } from '../src/contract.ts'
 
 /** 在出厂默认上做局部覆盖，得到一份完整设置段。 */
@@ -269,5 +277,57 @@ describe('renderSubagentRoster（回答「有几个子代理」的能力清单�
     expect(renderSubagentRoster(section, 's1')).toContain('`subagent_code_review`')
     expect(renderSubagentRoster(section, 's1')).not.toContain('`subagent_general_session`')
     expect(renderSubagentRoster(section, 's2')).toContain('`subagent_general_session`')
+  })
+})
+
+describe('childReplyAllowed', () => {
+  it('默认放行可继续对话的子代理，也放行模式读不到的子代理', () => {
+    expect(childReplyAllowed(sectionOf(), 'continuable')).toBe(true)
+    // unknown 必须放行：判定失败不能变成「子代理失去唯一的回发通道」
+    expect(childReplyAllowed(sectionOf(), 'unknown')).toBe(true)
+  })
+
+  it('一次性子代理不放行（回发必然被相邻关系拒绝）', () => {
+    expect(childReplyAllowed(sectionOf(), 'one-shot')).toBe(false)
+  })
+
+  it('开关关闭后一律不放行', () => {
+    const off = sectionOf({ childReplyToParent: false })
+    expect(childReplyAllowed(off, 'continuable')).toBe(false)
+    expect(childReplyAllowed(off, 'unknown')).toBe(false)
+  })
+})
+
+describe('renderSectionText：子代理作用域', () => {
+  it('放行回发时只说明回发通道与目标父代理，不照抄主会话的能力清单', () => {
+    const text = renderSectionText(sectionOf(), 'child-1', '', { parentSession: 'parent-9', reply: true })
+    expect(text).toContain('send_message')
+    expect(text).toContain('parent-9')
+    // 子代理拿不到委派/续话/编排工具，列出主会话清单只会让它以为自己能委派
+    expect(text).not.toContain(SECTION_HEADER)
+    expect(text).not.toContain('subagent_general_session')
+  })
+
+  it('未放行时不注入任何 Agent 提示段（空段会被宿主丢弃）', () => {
+    expect(renderSectionText(sectionOf(), 'child-1', '', { parentSession: 'parent-9', reply: false })).toBe('')
+  })
+
+  it('缺少父会话 id 时给出可读占位，而不是 undefined', () => {
+    const text = renderSectionText(sectionOf(), 'child-1', '', { reply: true })
+    expect(text).toContain('直接父代理的会话 id')
+    expect(text).not.toContain('undefined')
+  })
+
+  it('父会话 id 含 `$` 序列时原样写入（替换不做展开）', () => {
+    const text = renderSectionText(sectionOf(), 'child-1', '', { parentSession: 'p$&x', reply: true })
+    expect(text).toContain('`p$&x`')
+    expect(text).not.toContain('{parent}')
+  })
+
+  it('主会话调用（不传子代理入参）行为不变', () => {
+    const section = sectionOf({ sessions: { s1: { enabled: true, selected: ['general'] } } })
+    const text = renderSectionText(section, 's1', 'docs/model-guide.md')
+    expect(text).toContain(SECTION_HEADER)
+    expect(text).toContain('`subagent_general_session`')
   })
 })

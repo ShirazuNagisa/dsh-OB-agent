@@ -231,6 +231,7 @@ export function readSection(raw: unknown): ObAgentSection {
     promptVariables: readStrings(value.promptVariables) ?? [...DEFAULT_SECTION.promptVariables],
     autoEnableControlWithContinuable:
       readBoolean(value.autoEnableControlWithContinuable) ?? DEFAULT_SECTION.autoEnableControlWithContinuable,
+    childReplyToParent: readBoolean(value.childReplyToParent) ?? DEFAULT_SECTION.childReplyToParent,
     gate: readGate(value.gate),
     authoring: readAuthoring(value.authoring),
     modelGuide: readModelGuide(value.modelGuide),

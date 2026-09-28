@@ -6,6 +6,7 @@
  */
 import {
   subagentToolName,
+  type ChildContinuationMode,
   type EntryMode,
   type ObAgentEntry,
   type ObAgentSection,
@@ -19,6 +20,7 @@ import {
   ROSTER_NONE_UNMANAGED,
   ROSTER_NONE_UNSELECTED,
   SECTION_AUTHORING,
+  SECTION_CHILD_REPLY,
   SECTION_CONTINUABLE,
   SECTION_EMPTY,
   SECTION_HEADER,
@@ -87,8 +89,33 @@ export function resolveActive(section: ObAgentSection, sessionId: string): Activ
   return active
 }
 
-/** 闸门匹配器：按配置的前缀/精确名拦截，豁免名单与未纳管条目的工具名优先。 */
-export interface GateMatcher {
+/**
+ * 子代理是否放行「回发给直接父代理」的 `send_message`。
+ *
+ * 只排除**明确的一次性子代理**：一次性子代理调用它必然被 `ctx.subagents` 以相邻关系拒绝，
+ * 放行只会给模型一个永远失败的工具。模式读不到（`unknown`）时按放行处理 —— 宁可让极少数
+ * 一次性子代理多看到一个工具，也不能让正常的可继续对话子代理失去唯一的回发通道。
+ * @param section - 当前设置段。
+ * @param mode - 该子代理的续话模式。
+ * @returns 放行时为 true。
+ */
+export function childReplyAllowed(
+  section: Pick<ObAgentSection, 'childReplyToParent'>,
+  mode: ChildContinuationMode,
+): boolean {
+  if (!section.childReplyToParent) return false
+  return mode !== 'one-shot'
+}
+
+/** 子代理作用域的提示段输入（与主会话的能力清单互斥）。 */
+export interface ChildPromptInput {
+  /** 直接父代理的会话 id；缺失时给占位说明。 */
+  readonly parentSession?: string
+  /** 本次是否放行了回发。 */
+  readonly reply: boolean
+}
+
+/** 闸门匹配器：按配置的前缀/精确名拦截，豁免名单与未纳管条目的工具名优先。 */export interface GateMatcher {
   /** 该工具名是否落在拦截范围内。 */
   denies(name: string): boolean
   /** 生效的前缀正则（诊断用）。 */
@@ -213,7 +240,22 @@ export function sanitizeVariables(text: string, allowed: readonly string[]): str
 }
 
 /** 渲染本会话的「Agent 工具信息」系统提示段；未管理或未启用时返回空串（空段会被丢弃）。 */
-export function renderSectionText(section: ObAgentSection, sessionId: string, docHint: string): string {
+export function renderSectionText(
+  section: ObAgentSection,
+  sessionId: string,
+  docHint: string,
+  child?: ChildPromptInput,
+): string {
+  // 子代理作用域不展示主会话的能力清单：委派、续话与编排在子代理里一律不放行，
+  // 照抄一份主会话清单只会让子代理以为自己能委派。这里只说明它真正拥有的回发通道。
+  if (child !== undefined) {
+    if (!child.reply) return ''
+    const parent = child.parentSession === undefined || child.parentSession === ''
+      ? '（直接父代理的会话 id）'
+      : `\`${child.parentSession}\``
+    // 用函数式替换：会话 id 若含 `$&` 之类的序列，字符串替换会把它当成展开模式。
+    return sanitizeVariables(SECTION_CHILD_REPLY.replace('{parent}', () => parent), section.promptVariables)
+  }
   if (!section.gate.enabled) return ''
   const active = resolveActive(section, sessionId)
   const lines: string[] = [SECTION_HEADER]

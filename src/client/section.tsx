@@ -608,6 +608,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
       readOnlyTools: [...current.readOnlyTools],
       promptVariables: [...current.promptVariables],
       autoEnableControlWithContinuable: current.autoEnableControlWithContinuable,
+      childReplyToParent: current.childReplyToParent,
       gate: { ...current.gate },
       authoring: { ...current.authoring },
       modelGuide: { ...current.modelGuide },
@@ -639,6 +640,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
       readOnlyTools: [...DEFAULT_SECTION.readOnlyTools],
       promptVariables: [...DEFAULT_SECTION.promptVariables],
       autoEnableControlWithContinuable: DEFAULT_SECTION.autoEnableControlWithContinuable,
+      childReplyToParent: DEFAULT_SECTION.childReplyToParent,
       gate: { ...DEFAULT_SECTION.gate },
       authoring: { ...DEFAULT_SECTION.authoring },
       modelGuide: { ...DEFAULT_SECTION.modelGuide },
@@ -698,6 +700,13 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
             checked={current.autoEnableControlWithContinuable}
             disabled={disabled}
             onChange={autoEnableControlWithContinuable => { edit({ autoEnableControlWithContinuable }) }}
+          />
+          <SwitchRow
+            label={t('settings.childReply')}
+            desc={t('settings.childReplyDesc')}
+            checked={current.childReplyToParent}
+            disabled={disabled}
+            onChange={childReplyToParent => { edit({ childReplyToParent }) }}
           />
           <div className="dsh_obAgent_fields">
             <SelectField

@@ -4,7 +4,14 @@
  * 「可见性」通过注入的 `visibleTool(name)` 判定，因此本模块不依赖任何服务，可被
  * 单元测试完整覆盖。
  */
-import { subagentToolName, type EntryMode, type NativeImpl, type ObAgentEntry, type ObAgentSection } from './contract.ts'
+import {
+  CHILD_REPLY_TOOL,
+  subagentToolName,
+  type EntryMode,
+  type NativeImpl,
+  type ObAgentEntry,
+  type ObAgentSection,
+} from './contract.ts'
 import { UNAVAILABLE_READONLY } from './defaults.ts'
 
 /** 实装判定所需的只读能力查询。 */
@@ -43,6 +50,14 @@ export interface NativeInstallPlan {
    */
   readonly action: 'passthrough' | 'install' | 'plugin'
   readonly toolNames: readonly string[]
+  /**
+   * 只安装实现包里的这些工具名（缺省 = 安装该包提供的全部工具）。
+   *
+   * 用途：子代理回发父代理只放行 `send_message`，而 `@deepseek-ai/dsh-tool-subagent-control`
+   * 一次注册 `send_message` 与 `interrupt_agent` 两个工具 —— 整包装配会把子代理不该有的
+   * 中断能力一并带出来。
+   */
+  readonly onlyTools?: readonly string[]
 }
 
 export type InstallPlan = SubagentInstallPlan | NativeInstallPlan
@@ -105,8 +120,7 @@ export function planSubagent(
   }
 }
 
-/** 原生条目 → 放行 / 重挂 / 本插件注册。 */
-export function planNative(entry: ObAgentEntry, context: PlanContext): PlanResult {
+/** 原生条目 → 放行 / 重挂 / 本插件注册。 */export function planNative(entry: ObAgentEntry, context: PlanContext): PlanResult {
   const impl = entry.impl
   const declared = entry.toolNames ?? []
   if (impl === undefined) return { ok: false, reason: '原生条目缺少实现标识' }
@@ -131,4 +145,34 @@ export function planNative(entry: ObAgentEntry, context: PlanContext): PlanResul
     return { ok: true, plan: { kind: 'native', entry, impl, action: 'passthrough', toolNames: declared } }
   }
   return { ok: true, plan: { kind: 'native', entry, impl, action: 'install', toolNames: declared } }
+}
+
+/**
+ * 子代理回发计划的安装键。
+ *
+ * 刻意不采用 `keyOf` 的 `nat:<条目 id>` 形状：`~` 不是合法条目标识字符
+ * （见 `ENTRY_ID_PATTERN`），因此用户自建条目永远不可能撞上这个键。
+ */
+export const CHILD_REPLY_KEY = 'nat:~child-reply'
+
+/**
+ * 子代理回发给直接父代理的装配计划（只安装 `send_message`）。
+ *
+ * 为什么在子代理自有层重挂而不是「继承面有就不装」：委派工具在父会话里既能放行继承面、
+ * 也能由本插件重挂在父 agent 自有层，而父自有层不会传播给子代理（子代理只与父代理
+ * 共用同一份预设组合）。统一重挂让两种来源表现一致；自有层注册遮蔽同名继承工具是合法操作。
+ * @param entry - 提供 `send_message` 的原生条目（`impl === 'control'`）。
+ * @returns 只安装 `send_message` 的重挂计划；没有可用条目时 undefined。
+ */
+export function planChildReply(entry: ObAgentEntry | undefined): InstallPlan | undefined {
+  if (entry === undefined || entry.impl !== 'control') return undefined
+  if (!entry.toolNames?.includes(CHILD_REPLY_TOOL)) return undefined
+  return {
+    kind: 'native',
+    entry,
+    impl: 'control',
+    action: 'install',
+    toolNames: [CHILD_REPLY_TOOL],
+    onlyTools: [CHILD_REPLY_TOOL],
+  }
 }

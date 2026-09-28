@@ -24,6 +24,12 @@ export interface AgentLike {
   readonly ctx: HostContext
 }
 
+/** 会话事件（本插件只读取类型与载荷）。 */
+export interface SessionEventLike {
+  readonly type?: string
+  readonly data?: unknown
+}
+
 /** 会话面（仅本插件读取/追加的部分）。 */
 export interface SessionLike {
   readonly id: string
@@ -31,9 +37,25 @@ export interface SessionLike {
     readonly id: string
     readonly cwd?: string
     readonly origin?: 'subagent'
+    readonly parentSession?: string
     readonly agentPreset?: string
   }
   append(type: string, data: unknown): unknown
+  /**
+   * 本会话自有事件（fork 继承前缀之后）。
+   *
+   * 宿主在未来的会话实现里可能不再提供同步读取（上游已标记为弃用），因此声明为可选：
+   * 拿不到时本插件退化为「未知模式」，绝不因此中断协调。
+   */
+  ownEvents?(): readonly SessionEventLike[]
+  /** 完整事件快照；语义同 {@link SessionLike.ownEvents}。 */
+  snapshotEvents?(): readonly SessionEventLike[]
+}
+
+/** 会话投影读取面（`ctx.get('sessionProjections')`）。 */
+export interface SessionProjectionReadLike {
+  /** 读取某个已注册单元在该会话上的当前状态；键未注册或会话不可读时返回 undefined。 */
+  stateOf(session: SessionLike, key: string): unknown
 }
 
 /** agent 注册表（`ctx.get('agents')`）。 */
@@ -77,9 +99,15 @@ export interface ToolRuntimeLike {
   restrict(filter: { allow?: readonly string[]; deny?: readonly string[] }): Disposer
   /** 注册执行前守卫：返回字符串即拒绝。 */
   guard(guard: (exec: ToolExecLike) => string | undefined): Disposer
-  /** 按作用域解析可见工具（省略作用域 = 全局视图）。 */
+  /**
+   * 按「查看者作用域」解析可见工具（省略 = 全局视图）。
+   *
+   * `scope` 是上游的 `ScopeKey`（`object`）：**模型可见工具挂在 agent 平面上**，因此这里
+   * 必须传 **Agent 本身**（上游自己也这么用：`ctx.tools.get(name, agent)`）。传 `agent.ctx`
+   * 会落到一个没有层的键上，什么都查不到。
+   */
   get(name: string, scope?: unknown): ToolDefinitionLike | undefined
-  /** 按作用域投影当前模型可见的工具模式（用于枚举「继承面到底有哪些名字」）。 */
+  /** 按「查看者作用域」投影当前模型可见的工具模式（用于枚举「继承面到底有哪些名字」）；`scope` 语义同 {@link ToolRuntimeLike.get}。 */
   schemas?(scope?: unknown): readonly { readonly name: string }[]
 }
 

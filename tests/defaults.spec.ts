@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { BUILTIN_ENTRIES, DEFAULT_SECTION } from '../src/defaults.ts'
-import { ENTRY_ID_PATTERN, isDshProvidedEntry, subagentToolName } from '../src/contract.ts'
+import { ENTRY_ID_PATTERN, isDshProvidedEntry, subagentToolName, CHILD_REPLY_TOOL } from '../src/contract.ts'
 import { readSection, validateSection } from '../src/normalize.ts'
 import { createGateMatcher } from '../src/plan.ts'
 
@@ -88,5 +88,11 @@ describe('内置条目表', () => {
   it('只读白名单与提示词变量默认值非空且形状正确', () => {
     expect(DEFAULT_SECTION.readOnlyTools.length).toBeGreaterThan(0)
     expect(DEFAULT_SECTION.promptVariables).toEqual(['cwd', 'model'])
+  })
+
+  it('子代理回发出厂默认开启，且回发工具确实由控制类条目提供', () => {
+    expect(DEFAULT_SECTION.childReplyToParent).toBe(true)
+    const control = BUILTIN_ENTRIES.find(entry => entry.impl === 'control')
+    expect(control?.toolNames).toContain(CHILD_REPLY_TOOL)
   })
 })

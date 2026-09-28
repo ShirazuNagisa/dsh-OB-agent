@@ -232,6 +232,7 @@ export const DEFAULT_SECTION: ObAgentSection = Object.freeze({
   readOnlyTools: DEFAULT_READ_ONLY_TOOLS,
   promptVariables: DEFAULT_PROMPT_VARIABLES,
   autoEnableControlWithContinuable: true,
+  childReplyToParent: true,
   gate: DEFAULT_GATE,
   authoring: DEFAULT_AUTHORING,
   modelGuide: DEFAULT_MODEL_GUIDE,
@@ -265,6 +266,38 @@ export const SECTION_AUTHORING =
 /** 只读白名单为空导致某条目不可用时的告警文案。 */
 export const UNAVAILABLE_READONLY =
   '只读白名单与当前可见工具没有交集，条目已停用（不会降级为完全权限）'
+
+/** 子代理装配回发工具失败时的原因模板（`{tool}` 替换为工具名）。 */
+export const UNAVAILABLE_CHILD_REPLY = '子代理回发工具 {tool} 不可用'
+
+// ── 拦截文案与子代理提示段（仅数据；由 reconcile.ts 与 plan.ts 组装） ────────
+
+/** 主会话里的拦截说明（`{name}` 替换为工具名）。 */
+export const DENY_MESSAGE_MAIN =
+  '「{name}」在本会话被 dsh-ob-agent 拦截：子代理总开关未开启，或该能力未被勾选。'
+  + '请在聊天框的「子代理」面板打开总开关并勾选对应条目后重试。'
+
+/**
+ * 子代理内部的拦截说明（`{name}` 替换为工具名）。
+ *
+ * 必须与主会话文案区分：子代理本来就只开放「回发给直接父代理」这一个 Agent 工具，
+ * 让模型去勾选子代理条目是无效建议。
+ */
+export const DENY_MESSAGE_CHILD =
+  '「{name}」在子代理内部不可用：dsh-ob-agent 只对可继续对话的子代理开放 send_message（回发给直接父代理），'
+  + '不开放委派、续话与编排工具。需要子代理具备该能力时，请由主会话完成对应操作。'
+
+/**
+ * 子代理回发说明（`{parent}` 替换为直接父代理的会话 id）。
+ *
+ * 措辞刻意与上游的「可继续对话子代理」指引兼容：上游在子代理工具面能解析到带相邻标记的
+ * `send_message` 时，也会在初始任务里追加一段「结束时把结果发给父代理」的指引。这里只补充
+ * 通道与用法事实，不规定「结论必须写在哪里」，否则两份指引会互相打架。
+ */
+export const SECTION_CHILD_REPLY =
+  '你是可继续对话的子代理，可以用 send_message 向直接父代理回发消息：agent_id 填 `{parent}`，'
+  + '内容要自包含（父代理看不到你的对话、工具输出与推理）。需要父代理据此调整下一步、'
+  + '或你有中途结论要补充时随时回发；回发消息不会结束你的回合。'
 
 // ── `list_agents` 结果改写（仅数据；由 reconcile.ts 组装） ──────────────────
 

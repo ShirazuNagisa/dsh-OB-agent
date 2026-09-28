@@ -12,6 +12,7 @@ export const Config = z.object({
   readOnlyTools: z.array(z.string()).default(DEFAULT_SECTION.readOnlyTools).volatile(),
   promptVariables: z.array(z.string()).default(DEFAULT_SECTION.promptVariables).volatile(),
   autoEnableControlWithContinuable: z.boolean().default(DEFAULT_SECTION.autoEnableControlWithContinuable).volatile(),
+  childReplyToParent: z.boolean().default(DEFAULT_SECTION.childReplyToParent).volatile(),
   gate: z.any().default(DEFAULT_SECTION.gate).volatile(),
   authoring: z.any().default(DEFAULT_SECTION.authoring).volatile(),
   modelGuide: z.any().default(DEFAULT_SECTION.modelGuide).volatile(),
@@ -25,6 +26,7 @@ export interface PluginConfig {
   readOnlyTools: { get(): unknown }
   promptVariables: { get(): unknown }
   autoEnableControlWithContinuable: { get(): unknown }
+  childReplyToParent: { get(): unknown }
   gate: { get(): unknown }
   authoring: { get(): unknown }
   modelGuide: { get(): unknown }

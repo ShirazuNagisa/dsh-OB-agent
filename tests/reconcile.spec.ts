@@ -7,10 +7,20 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SECTION, LIST_AGENTS_EMPTY, LIST_AGENTS_NOTE, NATIVE_LIST_EMPTY } from '../src/defaults.ts'
 import { readSection } from '../src/normalize.ts'
-import { augmentListAgents, captureRegistrations, denyNamesFor, fingerprintOf, keyOf, restrictableNames, type ModuleName } from '../src/reconcile.ts'
-import type { InstallPlan } from '../src/implement.ts'
+import {
+  augmentListAgents,
+  captureRegistrations,
+  continuationModeOf,
+  denyNamesFor,
+  fingerprintOf,
+  keyOf,
+  registerSelectedTools,
+  restrictableNames,
+  type ModuleName,
+} from '../src/reconcile.ts'
+import { CHILD_REPLY_KEY, planChildReply, type InstallPlan } from '../src/implement.ts'
+import type { AgentLike, HostContext, ToolDefinitionLike } from '../src/context-types.ts'
 import type { ObAgentEntry } from '../src/contract.ts'
-import type { HostContext, ToolDefinitionLike } from '../src/context-types.ts'
 
 const entry: ObAgentEntry = {
   id: 'demo',
@@ -267,5 +277,189 @@ describe('captureRegistrations（代理截获上游注册，不落到真实登�
     })
     expect(captured).toEqual([definition])
     expect(error).toBe('上游炸了')
+  })
+})
+
+describe('registerSelectedTools（只安装指名工具）', () => {
+  const definitionOf = (name: string): ToolDefinitionLike => ({
+    name,
+    description: '',
+    parameters: {},
+    output: { schema: { type: 'object' }, render: () => [] },
+    execute: async () => ({}),
+  })
+  /** 上游 control 实现包的真实注册行为：一次注册两个工具。 */
+  const upstream = (ctx: unknown): void => {
+    const runtime = ctx as { tools: { register(item: ToolDefinitionLike): void } }
+    runtime.tools.register(definitionOf('send_message'))
+    runtime.tools.register(definitionOf('interrupt_agent'))
+  }
+  function runtimeOf(reject?: string): { ctx: HostContext; registered: string[] } {
+    const registered: string[] = []
+    const ctx = {
+      get: (name: string) => (name === 'tools'
+        ? {
+            register: (item: ToolDefinitionLike) => {
+              if (item.name === reject) throw new Error('同层重名')
+              registered.push(item.name)
+            },
+          }
+        : undefined),
+    } as unknown as HostContext
+    return { ctx, registered }
+  }
+
+  it('只注册点名的工具（子代理不会连带拿到 interrupt_agent）', () => {
+    const { ctx, registered } = runtimeOf()
+    const installed = registerSelectedTools(ctx, upstream, ['send_message'], () => undefined)
+    expect(installed).toBe(1)
+    expect(registered).toEqual(['send_message'])
+  })
+
+  it('实现包没有提供该定义时返回 0 并告警（不抛错）', () => {
+    const { ctx, registered } = runtimeOf()
+    const warnings: string[] = []
+    const installed = registerSelectedTools(ctx, upstream, ['send_to_parent'], message => warnings.push(message))
+    expect(installed).toBe(0)
+    expect(registered).toEqual([])
+    expect(warnings).toHaveLength(0)
+  })
+
+  it('注册被拒时记告警并继续后续名字', () => {
+    const { ctx, registered } = runtimeOf('send_message')
+    const warnings: string[] = []
+    const installed = registerSelectedTools(ctx, upstream, ['send_message', 'interrupt_agent'], m => warnings.push(m))
+    expect(installed).toBe(1)
+    expect(registered).toEqual(['interrupt_agent'])
+    expect(warnings[0]).toContain('注册 send_message 失败')
+  })
+
+  it('截获过程抛错时返回已截获部分的安装结果并告警', () => {
+    const { ctx, registered } = runtimeOf()
+    const warnings: string[] = []
+    const installed = registerSelectedTools(ctx, (inner) => {
+      upstream(inner)
+      throw new Error('上游炸了')
+    }, ['send_message'], message => warnings.push(message))
+    expect(installed).toBe(1)
+    expect(registered).toEqual(['send_message'])
+    expect(warnings[0]).toContain('截获工具定义失败')
+  })
+
+  it('作用域没有工具登记表时返回 0（不抛错）', () => {
+    const ctx = { get: () => undefined } as unknown as HostContext
+    expect(registerSelectedTools(ctx, upstream, ['send_message'], () => undefined)).toBe(0)
+  })
+})
+
+describe('continuationModeOf（子代理续话模式判定）', () => {  const logger = { info: () => undefined, warn: () => undefined, error: () => undefined }
+
+  /** 造一个子代理替身；session 额外字段用于注入投影/事件读取面。 */
+  function agentOf(session: Record<string, unknown> = {}): AgentLike {
+    return {
+      id: 'child-1',
+      session: {
+        id: 'child-1',
+        header: { id: 'child-1', origin: 'subagent', parentSession: 'parent-9' },
+        append: () => undefined,
+        ...session,
+      },
+      ctx: {},
+    } as unknown as AgentLike
+  }
+
+  function ctxOf(projections?: unknown): HostContext {
+    return {
+      logger,
+      get: (name: string) => (name === 'sessionProjections' ? projections : undefined),
+    } as unknown as HostContext
+  }
+
+  const descriptor = (mode: string): unknown => ({ type: 'subagent/descriptor', data: { version: 3, provider: 'spawn', mode } })
+
+  it('优先读会话投影（不必扫描日志）', () => {
+    const projections = { stateOf: () => ({ mode: 'continuable', label: '任务', seq: 3 }) }
+    expect(continuationModeOf(ctxOf(projections), agentOf())).toBe('continuable')
+  })
+
+  it('投影的宿主状态形状（identity 包一层）同样能读出模式', () => {
+    // 上游 `subagent` 投影的 host state 是 `{ identity?: { mode, … } }`，
+    // `{ mode, … }` 只是它的 wire 视图；两种形状都要认，否则首选路径静默失效。
+    const projections = { stateOf: () => ({ identity: { mode: 'one-shot', label: '一次性', seq: 2 } }) }
+    expect(continuationModeOf(ctxOf(projections), agentOf())).toBe('one-shot')
+  })
+
+  it('投影宿主状态里没有身份（identity 缺省 / null）时返回 unknown，而不是当作一次性', () => {
+    expect(continuationModeOf(ctxOf({ stateOf: () => ({}) }), agentOf())).toBe('unknown')
+    expect(continuationModeOf(ctxOf({ stateOf: () => ({ identity: null }) }), agentOf())).toBe('unknown')
+  })
+
+  it('投影不可用时退化为子会话日志里的首个 descriptor', () => {
+    const events = [descriptor('one-shot'), descriptor('continuable')]
+    const agent = agentOf({ ownEvents: () => events })
+    expect(continuationModeOf(ctxOf(undefined), agent)).toBe('one-shot')
+  })
+
+  it('只有完整日志快照时取最后一个 descriptor（fork 可能重放祖先的一次性身份）', () => {
+    // `ownEvents` 缺失（上游未来可能移除）时退到 `snapshotEvents`：此时首个事件可能是
+    // fork 种子重放的祖先 descriptor，取最后一个才与上游身份投影的 last-wins 一致。
+    const events = [descriptor('one-shot'), descriptor('continuable')]
+    const agent = agentOf({ snapshotEvents: () => events })
+    expect(continuationModeOf(ctxOf(undefined), agent)).toBe('continuable')
+  })
+
+  it('投影读取抛错时同样退化为日志扫描（不向调用方抛出）', () => {
+    const projections = {
+      stateOf: () => {
+        throw new Error('投影炸了')
+      },
+    }
+    const agent = agentOf({ ownEvents: () => [descriptor('continuable')] })
+    expect(continuationModeOf(ctxOf(projections), agent)).toBe('continuable')
+  })
+
+  it('投影没有该键（返回 null/undefined）时继续找日志', () => {
+    const projections = { stateOf: () => null }
+    const agent = agentOf({ snapshotEvents: () => [descriptor('continuable')] })
+    expect(continuationModeOf(ctxOf(projections), agent)).toBe('continuable')
+  })
+
+  it('两个来源都拿不到时返回 unknown（调用方按放行处理）', () => {
+    expect(continuationModeOf(ctxOf(undefined), agentOf())).toBe('unknown')
+    expect(continuationModeOf(ctxOf(undefined), agentOf({ ownEvents: () => [{ type: 'turn/start' }] }))).toBe('unknown')
+  })
+
+  it('载荷里的非法模式被忽略，不会当成确定结论', () => {
+    const agent = agentOf({ ownEvents: () => [descriptor('unknown')] })
+    expect(continuationModeOf(ctxOf(undefined), agent)).toBe('unknown')
+  })
+})
+
+describe('planChildReply（子代理回发父代理的装配计划）', () => {
+  const control = DEFAULT_SECTION.entries.find(item => item.impl === 'control') as ObAgentEntry
+
+  it('只安装 send_message，且安装键不可能与用户自建条目冲突', () => {
+    const plan = planChildReply(control)
+    expect(plan?.kind).toBe('native')
+    if (plan?.kind !== 'native') return
+    expect(plan.onlyTools).toEqual(['send_message'])
+    expect(plan.toolNames).toEqual(['send_message'])
+    expect(plan.action).toBe('install')
+    // `~` 不是合法条目标识字符，因此 keyOf 的 `nat:<id>` 形状永远不会撞上这个键
+    expect(CHILD_REPLY_KEY).toBe('nat:~child-reply')
+    expect(CHILD_REPLY_KEY.startsWith('nat:')).toBe(true)
+  })
+
+  it('指纹只由实现与工具名决定（设置不变则不重装）', () => {
+    const first = planChildReply(control)
+    const second = planChildReply({ ...control })
+    expect(first).toBeDefined()
+    expect(fingerprintOf(second as InstallPlan)).toBe(fingerprintOf(first as InstallPlan))
+  })
+
+  it('没有提供 send_message 的条目时不给计划（宁可没有工具，也不装错工具）', () => {
+    expect(planChildReply(undefined)).toBeUndefined()
+    expect(planChildReply({ ...control, impl: 'workflow' })).toBeUndefined()
+    expect(planChildReply({ ...control, toolNames: ['interrupt_agent'] })).toBeUndefined()
   })
 })

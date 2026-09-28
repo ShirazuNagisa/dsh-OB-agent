@@ -115,6 +115,15 @@ export interface ObAgentSection {
   readonly readOnlyTools: readonly string[]
   readonly promptVariables: readonly string[]
   readonly autoEnableControlWithContinuable: boolean
+  /**
+   * 在**可继续对话的子代理内部**默认放行「回发给直接父代理」的 `send_message`。
+   *
+   * 子代理作用域本来整片受闸门管辖（不装配任何委派或编排能力），但没有回发通道时
+   * 子代理只能把结论压在最终回复里：中途发现方向错了、缺少输入、需要追加信息都传不出来。
+   * 打开后只有 `send_message` 一个工具被放行，且仍由 DSH 校验相邻关系（一次性子代理
+   * 与越级目标会被服务层拒绝）。
+   */
+  readonly childReplyToParent: boolean
   readonly gate: ObAgentGate
   readonly authoring: ObAgentAuthoring
   readonly modelGuide: ObAgentModelGuide
@@ -163,9 +172,20 @@ export function isDshProvidedEntry(entry: ObAgentEntry): boolean {
 
 /** 只读工具白名单的默认集（文件读取类；实际生效值是它与该作用域真实可见工具的交集）。 */
 export const DEFAULT_READ_ONLY_TOOLS: readonly string[] = ['read', 'read_image', 'glob', 'grep']
-
 /** 提示词变量白名单默认集：必须是装配里真实注册过的变量，否则渲染会抛错。 */
 export const DEFAULT_PROMPT_VARIABLES: readonly string[] = ['cwd', 'model']
 
 /** 会话选择映射保留的最大条数（按最近写入裁剪）。 */
 export const MAX_SESSION_STATES = 120
+
+/**
+ * 「子代理回发给直接父代理」所用的工具名。
+ *
+ * 只有 `send_message`：`interrupt_agent` 的目标是「你创建的代理」，子代理没有可中断的对象，
+ * 放行它只会给出一个永远失败的工具。上游 `send_message` 的目标允许是「直接父代理」
+ * （仅当调用方是驻留的可继续对话子代理），相邻关系由 `ctx.subagents` 服务校验。
+ */
+export const CHILD_REPLY_TOOL = 'send_message'
+
+/** 子代理续话模式：由子会话日志的 `subagent/descriptor` 折叠而来；`unknown` = 读不到。 */
+export type ChildContinuationMode = 'one-shot' | 'continuable' | 'unknown'

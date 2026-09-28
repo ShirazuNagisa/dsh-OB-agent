@@ -17,6 +17,9 @@
  *
  * 子代理（`session.header.origin === 'subagent'`）只装第 1、2 层，永不装第 3 层 —
  * 任何子代理都无法再委派。
+ *
+ * 唯一的例外是「回发给直接父代理」：可继续对话的子代理会额外拿到一个重挂的
+ * `send_message`（见 {@link planChildReply}），它只是消息通道，不构成新的委派能力。
  */
 import type {
   AgentLike,
@@ -24,14 +27,38 @@ import type {
   Fiber,
   HostContext,
   LoggerLike,
+  SessionEventLike,
+  SessionProjectionReadLike,
   SystemPromptLike,
   ToolDefinitionLike,
   ToolRuntimeLike,
 } from './context-types.ts'
-import { SECTION_NAME, type ObAgentSection } from './contract.ts'
-import { createGateMatcher, renderSectionText, renderSubagentRoster, resolveActive, type ActiveEntry } from './plan.ts'
-import { planNative, planSubagent, type InstallPlan, type PlanContext, type PlanResult } from './implement.ts'
-import { LIST_AGENTS_EMPTY, LIST_AGENTS_NOTE, NATIVE_LIST_EMPTY } from './defaults.ts'
+import { CHILD_REPLY_TOOL, SECTION_NAME, type ChildContinuationMode, type ObAgentSection } from './contract.ts'
+import {
+  childReplyAllowed,
+  createGateMatcher,
+  renderSectionText,
+  renderSubagentRoster,
+  resolveActive,
+  type ActiveEntry,
+} from './plan.ts'
+import {
+  CHILD_REPLY_KEY,
+  planChildReply,
+  planNative,
+  planSubagent,
+  type InstallPlan,
+  type PlanContext,
+  type PlanResult,
+} from './implement.ts'
+import {
+  DENY_MESSAGE_CHILD,
+  DENY_MESSAGE_MAIN,
+  LIST_AGENTS_EMPTY,
+  LIST_AGENTS_NOTE,
+  NATIVE_LIST_EMPTY,
+  UNAVAILABLE_CHILD_REPLY,
+} from './defaults.ts'
 import { docHint } from './docpath.ts'
 import { authoringTools, type AuthoringDeps } from './authoring.ts'
 
@@ -92,12 +119,30 @@ interface Install {
   readonly dispose: () => void | Promise<void>
 }
 
+interface DenyAttempt {
+  readonly names: readonly string[]
+  readonly definitions: readonly (ToolDefinitionLike | undefined)[]
+}
+
 /** 一个 agent 的协调状态。 */
 interface AgentState {
   /** 基础注入 fiber（守卫 + 系统提示段）。 */
   base: Fiber | undefined
-  /** 隔离层：已应用的拒绝名单与释放器。 */
-  restrict: { names: readonly string[]; dispose: Disposer } | undefined
+  /**
+   * 隔离层：已成功应用的名字与各自的释放器。
+   *
+   * 上游 `restrict` 是「全或无」的（名单里只要有一个名字不在继承面就整次抛错），因此
+   * 逐个应用时会有多个释放器；`names` 是这些释放器覆盖的并集，用于幂等比较。
+   */
+  restrict: { names: readonly string[]; disposers: readonly Disposer[] } | undefined
+  /**
+   * 与守卫**同一个注入面**捕获的工具登记表（作用域绑定）。
+   *
+   * 隐藏层必须用它而不是 `agent.ctx.get('tools')`：`register` / `guard` 走注入面都已实证
+   * 生效，而 `restrict` 直接 `get` 时拿到的实例不带调用方作用域（上游会在
+   * `scopeOf(this.ctx)` 处抛「requires a scoped context」），整层静默失效。
+   */
+  scopedTools: ToolRuntimeLike | undefined
   /** 已安装条目（键 = `sub:<条目id>:<模式>` 或 `nat:<条目id>`）。 */
   installs: Map<string, Install>
   /** 闸门匹配：守卫闭包读取（设置变更后立即生效，无需重装守卫）。 */
@@ -108,9 +153,15 @@ interface AgentState {
   known: Set<string>
   /** 上一次**成功**应用隐藏层的名字集合：它们已被隐藏、因而不在可见枚举里，但仍可被重复限制。 */
   restricted: Set<string>
+  /** 上次尝试的名单与尝试结束后的可见定义，避免部分失败时被自身事件反复重装。 */
+  denyAttempt: DenyAttempt | undefined
   /** 调谐中标记：把重入折叠成一次尾随重算。 */
   reconciling: boolean
   pending: boolean
+  /** 子代理续话模式：判定出确定值后缓存（`unknown` 每次重算重试）。 */
+  childMode: ChildContinuationMode
+  /** 本次是否放行了子代理回发给直接父代理（系统提示段实时读取）。 */
+  childReply: boolean
 }
 
 const states = new WeakMap<AgentLike, AgentState>()
@@ -121,13 +172,17 @@ function stateOf(agent: AgentLike): AgentState {
     state = {
       base: undefined,
       restrict: undefined,
+      scopedTools: undefined,
       installs: new Map<string, Install>(),
       denies: () => false,
       allowed: new Set<string>(),
       known: new Set<string>(),
       restricted: new Set<string>(),
+      denyAttempt: undefined,
       reconciling: false,
       pending: false,
+      childMode: 'unknown',
+      childReply: false,
     }
     states.set(agent, state)
   }
@@ -137,6 +192,79 @@ function stateOf(agent: AgentLike): AgentState {
 /** 子代理只受闸门约束，不再委派。 */
 function isChildAgent(agent: AgentLike): boolean {
   return agent.session.header.origin === 'subagent'
+}
+
+/** 认出一个合法的续话模式字面量。 */
+function pickMode(value: unknown): ChildContinuationMode | undefined {
+  return value === 'one-shot' || value === 'continuable' ? value : undefined
+}
+
+/**
+ * 从投影结果或事件载荷里读出续话模式；形状不符时返回 undefined。
+ *
+ * 两种形状都要认：`subagent/descriptor` **事件**的载荷是 `{ mode, … }`，而 `subagent`
+ * 投影的**宿主状态**是 `{ identity?: { mode, … } }`（`{ mode, … }` 只是它的 wire 视图）。
+ * 只认前者会让首选路径静默失效，每次都退化成扫描子会话日志。
+ * @param value - 待解析的载荷。
+ * @returns 续话模式，或 undefined。
+ */
+function readMode(value: unknown): ChildContinuationMode | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as { mode?: unknown; identity?: unknown }
+  const direct = pickMode(record.mode)
+  if (direct !== undefined) return direct
+  const nested = record.identity
+  if (nested === null || nested === undefined || typeof nested !== 'object') return undefined
+  return pickMode((nested as { mode?: unknown }).mode)
+}
+
+/**
+ * 判定一个子代理会话是可继续对话还是一次性。
+ *
+ * 依据是子会话日志里那条权威的 `subagent/descriptor`（由创建它的提供方在子代理首个
+ * 回合内、首次请求之前追加，因此 `agent/created` 触发协调时它已经落盘）。读取顺序：
+ * 1. `subagent` 会话投影（首选：纯读、不扫日志、不需要 deprecated API）；
+ * 2. 子会话自有事件里的首个 `subagent/descriptor`；
+ * 3. 完整日志快照里的**最后一个**有效 descriptor（可能含 fork 重放的祖先事件）；
+ * 4. 都拿不到时返回 `unknown` —— 调用方按放行处理，绝不让判定失败变成「子代理不能回发」。
+ * @param ctx - 主机上下文（读取投影服务）。
+ * @param agent - 待判定的子代理。
+ * @returns 续话模式。
+ */
+export function continuationModeOf(ctx: HostContext, agent: AgentLike): ChildContinuationMode {
+  const projections = serviceOf<SessionProjectionReadLike>(ctx, 'sessionProjections')
+  if (projections !== undefined && typeof projections.stateOf === 'function') {
+    try {
+      const mode = readMode(projections.stateOf(agent.session, 'subagent'))
+      if (mode !== undefined) return mode
+    } catch (error) {
+      ctx.logger.warn(
+        `dsh-ob-agent: 读取子代理投影失败，退化为扫描子会话日志：`
+        + `${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+  try {
+    const ownEvents = agent.session.ownEvents?.()
+    const events: readonly SessionEventLike[] = ownEvents ?? agent.session.snapshotEvents?.() ?? []
+    let last: ChildContinuationMode | undefined
+    for (const event of events) {
+      if (event?.type !== 'subagent/descriptor') continue
+      const mode = readMode(event.data)
+      if (mode === undefined) continue
+      // 自有后缀（`ownEvents`）里首个 descriptor 权威；完整日志可能重放 fork 祖先的
+      // descriptor，因此与上游 `subagent` 身份投影一致地取**最后一个**（last-wins）。
+      if (ownEvents !== undefined) return mode
+      last = mode
+    }
+    if (last !== undefined) return last
+  } catch (error) {
+    ctx.logger.warn(
+      `dsh-ob-agent: 扫描子会话日志失败，子代理续话模式视为未知：`
+      + `${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  return 'unknown'
 }
 
 function serviceOf<T>(ctx: HostContext, name: string): T | undefined {
@@ -149,7 +277,11 @@ function readVisibleNames(tools: ToolRuntimeLike, agent: AgentLike, logger: Logg
   const names = new Set<string>()
   if (typeof tools.schemas !== 'function') return names
   try {
-    for (const schema of tools.schemas(agent.ctx)) names.add(schema.name)
+    // 查看者必须是 **agent 本身**：`schemas(scope)` 的 scope 是「查看者作用域键」，而上游把
+    // 模型可见工具放在 agent 平面上（preset 的贡献对 agent 而言是祖先层）。传 `agent.ctx`
+    // 会落在一个没有层的键上，枚举结果为空 —— 拒绝名单随之算空，隐藏层静默失效，
+    // 于是子代理会看到一堆「可见但一调用就被守卫拒绝」的工具。
+    for (const schema of tools.schemas(agent)) names.add(schema.name)
   } catch (error) {
     logger.warn(`dsh-ob-agent: 枚举可见工具失败，闸门的名称枚举退化为配置名单：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -326,6 +458,41 @@ export function augmentListAgents(
   }
 }
 
+/**
+ * 截获实现包注册的工具定义，把**指名的那些**注册到作用域里（纯装配动作，便于测试）。
+ *
+ * 用于「只装 `send_message`」这类场景：整包装配会把同一实现包里的其它工具一并带出来。
+ * 截获失败、定义缺失、注册被拒都只记告警并继续，绝不让协调器崩掉。
+ * @param runtimeCtx - 目标作用域上下文。
+ * @param apply - 实现包的 `apply`。
+ * @param names - 需要安装的工具名（按给定顺序）。
+ * @param warn - 告警出口（调用方补上插件前缀）。
+ * @returns 实际注册成功的数量。
+ */
+export function registerSelectedTools(
+  runtimeCtx: HostContext,
+  apply: (ctx: unknown) => void,
+  names: readonly string[],
+  warn: (message: string) => void,
+): number {
+  const tools = serviceOf<ToolRuntimeLike>(runtimeCtx, 'tools')
+  if (tools === undefined) return 0
+  const { captured, error } = captureRegistrations(runtimeCtx, apply)
+  if (error !== undefined) warn(`截获工具定义失败：${error}`)
+  let installed = 0
+  for (const name of names) {
+    const definition = captured.find(item => item.name === name)
+    if (definition === undefined) continue
+    try {
+      tools.register(definition)
+      installed += 1
+    } catch (failure) {
+      warn(`注册 ${name} 失败：${failure instanceof Error ? failure.message : String(failure)}`)
+    }
+  }
+  return installed
+}
+
 /** 安装一个计划；返回释放器或不可用原因。 */
 function installPlan(
   deps: ReconcileDeps,
@@ -361,6 +528,25 @@ function installPlan(
   }
   const module = moduleOf(plan.impl as ModuleName)
   if (module === undefined) return { reason: moduleFailure(plan.impl as ModuleName) ?? `实现包 ${plan.impl} 不可用` }
+  // 只安装指名工具（子代理回发）：截获实现包注册的定义，按名字挑出需要的那一个。
+  // 不整包装配的理由见 `NativeInstallPlan.onlyTools`：那会把 interrupt_agent 也带进子代理。
+  if (plan.onlyTools !== undefined) {
+    const wanted = [...plan.onlyTools]
+    const fiber = agent.ctx.inject(['tools', 'subagents'], (runtimeCtx) => {
+      const installed = registerSelectedTools(
+        runtimeCtx,
+        ctx => module.apply(ctx),
+        wanted,
+        message => deps.ctx.logger.warn(`dsh-ob-agent: ${message}`),
+      )
+      if (installed === 0) {
+        deps.ctx.logger.warn(
+          `dsh-ob-agent: 未能装配 ${wanted.join('、')}（实现包 ${plan.impl} 没有提供对应定义）`,
+        )
+      }
+    })
+    return { dispose: () => fiber.dispose() }
+  }
   if (plan.impl === 'list-agents') {
     const sessionId = agent.session.id
     const fiber = agent.ctx.inject(['tools', 'subagents', 'agents'], (runtimeCtx) => {
@@ -456,13 +642,24 @@ export async function reconcileAgent(deps: ReconcileDeps, agent: AgentLike): Pro
 async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: AgentState): Promise<void> {
   const section = deps.read()
   const managing = section.gate.enabled
-  const active = managing && !isChildAgent(agent) ? resolveActive(section, agent.session.id) : []
+  const child = isChildAgent(agent)
+  const active = managing && !child ? resolveActive(section, agent.session.id) : []
 
   // 闸门匹配与允许集合先行更新：守卫闭包读取它们，因此「未开启/未勾选就不可用」
   // 这条语义始终成立，即使后面的装配失败。
   const gate = createGateMatcher(section)
   state.denies = managing ? (name: string) => gate.denies(name) : () => false
   state.allowed = new Set(active.flatMap(item => [...item.toolNames]))
+
+  // 子代理回发给直接父代理：唯一在子代理内部放行的 Agent 工具。
+  // 模式判定结果会被缓存，`unknown` 则每次重算重试（descriptor 可能晚于首次协调落盘）。
+  if (managing && child) {
+    if (state.childMode === 'unknown') state.childMode = continuationModeOf(deps.ctx, agent)
+    state.childReply = childReplyAllowed(section, state.childMode)
+    if (state.childReply) state.allowed.add(CHILD_REPLY_TOOL)
+  } else {
+    state.childReply = false
+  }
 
   const tools = serviceOf<ToolRuntimeLike>(agent.ctx, 'tools')
   if (tools === undefined) {
@@ -477,13 +674,17 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
       const scopedTools = serviceOf<ToolRuntimeLike>(runtimeCtx, 'tools')
       const systemPrompt = serviceOf<SystemPromptLike>(runtimeCtx, 'systemPrompt')
       if (scopedTools === undefined || systemPrompt === undefined) return
+      // 隐藏层必须用这个「注入面」拿到的登记表：它带调用方作用域，与 `guard` / `register`
+      // 完全同源。直接 `agent.ctx.get('tools')` 拿到的实例不带作用域，`restrict` 会抛错。
+      state.scopedTools = scopedTools
       scopedTools.guard((exec) => {
         const name = exec.name
         if (name === undefined || name === '') return undefined
         if (!state.denies(name)) return undefined
         if (state.allowed.has(name)) return undefined
-        return `「${name}」在本会话被 dsh-ob-agent 拦截：子代理总开关未开启，或该能力未被勾选。`
-          + '请在聊天框的「子代理」面板打开总开关并勾选对应条目后重试。'
+        // 子代理与主会话的拒绝理由不同：让子代理去「面板勾选条目」是无效建议。
+        const template = child ? DENY_MESSAGE_CHILD : DENY_MESSAGE_MAIN
+        return template.replace('{name}', name)
       })
       systemPrompt.section({
         name: SECTION_NAME,
@@ -491,7 +692,15 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
         text: () => {
           try {
             const current = deps.read()
-            return renderSectionText(current, sessionId, docHint(current.modelGuide))
+            // 子代理只看回发说明，主会话看本会话的能力清单：两者的工具面本来就不同。
+            return renderSectionText(
+              current,
+              sessionId,
+              docHint(current.modelGuide),
+              child
+                ? { parentSession: agent.session.header.parentSession, reply: state.childReply }
+                : undefined,
+            )
           } catch (error) {
             deps.ctx.logger.warn(
               `dsh-ob-agent: 渲染 Agent 提示段失败：${error instanceof Error ? error.message : String(error)}`,
@@ -508,6 +717,19 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
   const visible = readVisibleNames(tools, agent, deps.ctx.logger)
   const ownNames = new Set([...state.installs.values()].flatMap(install => [...install.names]))
   const { plans, failures } = plansFor(section, active, name => visible.has(name) && !ownNames.has(name))
+  // 子代理回发：把只装 send_message 的计划并入目标集合，之后的重装/卸载/指纹比对一视同仁。
+  if (state.childReply) {
+    const control = section.entries.find(entry => entry.managed && entry.impl === 'control')
+    const plan = planChildReply(control)
+    if (plan === undefined) {
+      deps.ctx.logger.warn(
+        `dsh-ob-agent: ${UNAVAILABLE_CHILD_REPLY.replace('{tool}', CHILD_REPLY_TOOL)}`
+        + '（条目表里没有提供该工具的原生条目）',
+      )
+    } else {
+      plans.set(CHILD_REPLY_KEY, plan)
+    }
+  }
   for (const [key, reason] of failures) {
     deps.ctx.logger.warn(`dsh-ob-agent: 条目 ${key} 本会话不可用：${reason}`)
   }
@@ -564,7 +786,13 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
     }
     state.installs.set(key, {
       fingerprint: fingerprintOf(plan),
-      names: plan.kind === 'subagent' ? [plan.toolName] : plan.toolNames,
+      // `passthrough`（档 A）表示工具由继承面提供、本插件没有在自有层注册任何东西，
+      // 因此它不贡献「自有层名字」。若把它的工具名记进来，下一轮 `visibleTool` 会把这些
+      // 名字判成不可见，档 A 就翻成档 B（`subagent-preset` 更会翻成「条目不可用」），
+      // 形成每两轮一次的震荡与自相矛盾的告警。
+      names: plan.kind === 'native' && plan.action === 'passthrough'
+        ? []
+        : plan.kind === 'subagent' ? [plan.toolName] : plan.toolNames,
       dispose: installed.dispose,
     })
   }
@@ -603,7 +831,8 @@ function applyDenyLayer(
   }
   const resolvable = (name: string): boolean => {
     try {
-      return tools.get(name, agent.ctx) !== undefined
+      // 与 `schemas` 同一套作用域语义：查看者传 agent（见 readVisibleNames 的说明）。
+      return tools.get(name, agent) !== undefined
     } catch {
       return false
     }
@@ -615,54 +844,172 @@ function applyDenyLayer(
     resolvable,
   )
 
+  const definitionsOf = (): (ToolDefinitionLike | undefined)[] => deny.map(name => {
+    try {
+      return tools.get(name, agent)
+    } catch {
+      return undefined
+    }
+  })
+  const previous = state.denyAttempt
+  const currentDefinitions = definitionsOf()
+  if (previous !== undefined
+    && previous.names.length === deny.length
+    && previous.names.every((name, index) => name === deny[index]
+      && previous.definitions[index] === currentDefinitions[index])) return
+
   const unchanged = state.restrict !== undefined
     && state.restrict.names.length === deny.length
     && state.restrict.names.every((name, index) => name === deny[index])
-  if (unchanged) return
+  if (unchanged) {
+    state.denyAttempt = { names: [...deny], definitions: currentDefinitions }
+    return
+  }
 
-  if (attemptRestrict(deps, agent, state, tools, deny)) return
-  // 退化：预设切换可能让某个「上一轮限制过」的名字彻底消失，只保留当前可解析的名字重试。
-  const fallback = deny.filter(name => resolvable(name))
-  if (fallback.length !== deny.length) attemptRestrict(deps, agent, state, tools, fallback)
+  // 隐藏层必须作用在**调用方 agent 的作用域**上。上游 `restrict()` 读的是登记表实例自己的
+  // `this.ctx`（`scopeOf(this.ctx)`，没有作用域就直接抛错），而不同取法拿到的实例未必都带
+  // 作用域；因此这里按「最可能带作用域」的顺序逐个候选尝试，任一成功即停。
+  const candidates = layerCandidates(agent, state, tools)
+  const errors: string[] = []
+  try {
+    for (const layer of candidates) {
+      // 整批应用：名单里只要有一个名字不是继承面名字，上游就「全或无」地整次抛错。
+      const batch = attemptRestrict(state, layer, deny)
+      if (batch.ok) return
+      errors.push(batch.error)
+      // 退化一：预设切换可能让某个「上一轮限制过」的名字彻底消失，只保留当前可解析的名字重试。
+      const fallback = deny.filter(name => resolvable(name))
+      if (fallback.length !== deny.length && fallback.length > 0) {
+        const retry = attemptRestrict(state, layer, fallback)
+        if (retry.ok) return
+        errors.push(retry.error)
+      }
+      // 退化二：逐个名字重试，把能隐藏的先救回来，失败的名字继续由执行层守卫兜住。
+      const single = attemptRestrictOneByOne(state, layer, fallback.length > 0 ? fallback : deny)
+      if (single.ok) {
+        if (single.failed.length > 0) {
+          deps.ctx.logger.warn(
+            `dsh-ob-agent: agent ${agent.id} 有 ${single.failed.length} 个名字无法进入隐藏层`
+            + `（它们仍会被执行层守卫拒绝）：${single.failed.join('；')}`,
+          )
+        }
+        return
+      }
+      errors.push(single.error)
+    }
+    deps.ctx.logger.warn(
+      `dsh-ob-agent: agent ${agent.id} 未能应用工具隐藏层（闸门仍由执行层兜住；`
+      + `被拦工具会留在模型清单里，只能在调用时拒绝）：${errors.filter(Boolean).join(' | ')}`,
+    )
+  } finally {
+    // restrict()/dispose() 同步发出 tools/change。记录操作后的视图，下一轮相同状态直接返回。
+    state.denyAttempt = { names: [...deny], definitions: definitionsOf() }
+  }
+}
+
+/**
+ * 隐藏层的候选工具登记表，按「最可能带调用方作用域」排序。
+ *
+ * 上游 `restrict()` 用登记表实例自己的 `this.ctx` 决定作用域，而获取实例的几种写法
+ * （注入面 / `ctx.tools` 属性 / `ctx.get('tools')`）在 cordis 里未必解析到同一个 receiver。
+ * 与其赌一种，不如依次尝试：能成功应用的那个就是带作用域的。
+ * @param agent - 目标 agent。
+ * @param state - 该 agent 的协调状态（含注入面捕获的实例）。
+ * @param direct - 直接取到的实例（兜底）。
+ * @returns 去重后的候选列表。
+ */
+function layerCandidates(agent: AgentLike, state: AgentState, direct: ToolRuntimeLike): ToolRuntimeLike[] {
+  const seen = new Set<ToolRuntimeLike>()
+  const list: ToolRuntimeLike[] = []
+  const push = (candidate: unknown): void => {
+    if (candidate === undefined || candidate === null) return
+    const typed = candidate as ToolRuntimeLike
+    if (typeof typed.restrict !== 'function' || seen.has(typed)) return
+    seen.add(typed)
+    list.push(typed)
+  }
+  push(state.scopedTools)
+  push((agent.ctx as unknown as { tools?: unknown }).tools)
+  push(direct)
+  return list
+}
+
+/**
+ * 逐个名字应用隐藏层（只在整批失败后调用）。
+ *
+ * 代价是每个名字一次 `restrict`（各带一个 effect），因此只在整批失败这条降级路径上使用；
+ * 幂等比较仍按并集名字集合进行，名单不变就不会反复重装。日志由调用方统一输出，避免多候选
+ * 重试时刷屏。
+ * @param state - 该 agent 的协调状态。
+ * @param tools - 候选工具登记表。
+ * @param names - 期望隐藏的名字。
+ * @returns 是否至少隐藏了一个名字，以及隐藏失败的名字与最后一次错误。
+ */
+function attemptRestrictOneByOne(
+  state: AgentState,
+  tools: ToolRuntimeLike,
+  names: readonly string[],
+): { ok: boolean; failed: string[]; error: string } {
+  const applied: string[] = []
+  const disposers: Disposer[] = []
+  const failed: string[] = []
+  let lastError = ''
+  for (const name of names) {
+    try {
+      disposers.push(tools.restrict({ deny: [name] }))
+      applied.push(name)
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
+      failed.push(`${name}（${lastError}）`)
+    }
+  }
+  state.restrict = applied.length === 0 ? undefined : { names: applied, disposers }
+  state.restricted = new Set(applied)
+  return { ok: applied.length > 0, failed, error: lastError }
 }
 
 /**
  * 应用一次隐藏层（含空名单）。
  *
- * 每次调用都先释放上一层的 disposer：否则「目标名单变空」时旧限制会一直挂着，
+ * 每次调用都先释放上一层的全部 disposer：否则「目标名单变空」时旧限制会一直挂着，
  * 而 `state.restricted` 却已被清空 —— 之后需要重新隐藏时会因为「不可解析且不在
  * restricted 里」把本该隐藏的名字放出来。
- * @param deps - 协调器依赖。
- * @param agent - 目标 agent。
  * @param state - 该 agent 的协调状态。
- * @param tools - 工具登记表。
+ * @param tools - 候选工具登记表。
  * @param names - 本次要隐藏的名字。
- * @returns 是否应用成功。
+ * @returns 是否成功，以及失败时的上游错误信息（由调用方决定怎么记）。
  */
 function attemptRestrict(
-  deps: ReconcileDeps,
-  agent: AgentLike,
   state: AgentState,
   tools: ToolRuntimeLike,
   names: readonly string[],
-): boolean {
-  state.restrict?.dispose()
-  state.restrict = undefined
+): { ok: boolean; error: string } {
+  releaseRestrict(state)
   if (names.length === 0) {
     state.restricted = new Set<string>()
-    return true
+    return { ok: true, error: '' }
   }
   try {
-    state.restrict = { names: [...names], dispose: tools.restrict({ deny: [...names] }) }
+    state.restrict = { names: [...names], disposers: [tools.restrict({ deny: [...names] })] }
     state.restricted = new Set(names)
-    return true
+    return { ok: true, error: '' }
   } catch (error) {
     state.restricted = new Set<string>()
-    deps.ctx.logger.warn(
-      `dsh-ob-agent: agent ${agent.id} 应用工具隐藏层失败（闸门仍由执行层兜住）：`
-      + `${error instanceof Error ? error.message : String(error)}`,
-    )
-    return false
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/** 释放该 agent 已应用的隐藏层（不改变 `restricted` 记录）。 */
+function releaseRestrict(state: AgentState): void {
+  const current = state.restrict
+  state.restrict = undefined
+  if (current === undefined) return
+  for (const dispose of current.disposers) {
+    try {
+      dispose()
+    } catch {
+      // 释放失败无需诊断噪音：agent 可能已经在销毁路径上。
+    }
   }
 }
 
@@ -678,7 +1025,13 @@ export async function disposeAgent(agent: AgentLike): Promise<void> {
       // agent 已经销毁：释放失败无需诊断噪音。
     }
   }
-  state.restrict?.dispose()
+  state.restrict?.disposers.forEach(dispose => {
+    try {
+      dispose()
+    } catch {
+      // 同上。
+    }
+  })
   try {
     await state.base?.dispose()
   } catch {

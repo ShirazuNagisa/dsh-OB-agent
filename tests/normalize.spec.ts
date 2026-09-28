@@ -47,6 +47,14 @@ describe('readSection', () => {
     expect(section.gate.tools).toEqual([...DEFAULT_SECTION.gate.tools])
   })
 
+  it('子代理回发开关缺省时按出厂默认开启，显式关闭后保持关闭', () => {
+    expect(readSection(undefined).childReplyToParent).toBe(true)
+    expect(readSection({}).childReplyToParent).toBe(true)
+    expect(readSection({ childReplyToParent: false }).childReplyToParent).toBe(false)
+    // 非布尔值不能被当成 true：读不出来就回落默认
+    expect(readSection({ childReplyToParent: 'yes' }).childReplyToParent).toBe(true)
+  })
+
   it('entries 存在但非法时得到空表（不静默回退为出厂条目）', () => {
     expect(readSection({ entries: [{ id: 'BAD ID' }] }).entries).toEqual([])
   })
