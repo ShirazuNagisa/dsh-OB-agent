@@ -1,12 +1,10 @@
 /**
  * dsh-ob-agent 浏览器插件：聊天输入框上方的「子代理」条 + 设置页「子代理」。
  *
- * 两处界面共用同一个设置桥（`ctx.settingsScope` 绑定的 `ob-agent` 命名空间）：
- * 会话级选择存放在该命名空间的 `sessions` 映射里，因此不需要自定义 Remote、投影或
- * HTTP 路由，也不存在「界面与主机状态不一致」的中间层。
+ * 两处界面共用 `dsh-ob-agent` 的配置表单；会话级选择与全局配置保存在同一个
+ * `section` 对象中，由 DSH 的 configForms 负责同步和持久化。
  */
-import type { ClientContext, SettingsScopeBinderLike } from '../context-types.ts'
-import { OB_AGENT_NAMESPACE } from '../contract.ts'
+import type { ClientContext, ClientSettingsScope, ConfigFormsLike } from '../context-types.ts'
 import { ObAgentDock, type ObAgentDockInjected } from './dock.tsx'
 import { NS, en, zh } from './locales.ts'
 import { loadModelCatalog, type ModelCatalogResult } from './modelcatalog.ts'
@@ -14,8 +12,8 @@ import { ObAgentSection, type ObAgentSectionInjected } from './section.tsx'
 import { adoptStyles } from './styles.ts'
 import { createObAgentStore, type ObAgentStore, type ObAgentWire } from './store.ts'
 
-/** 必需服务：槽位注册表、文案、设置命名空间句柄。 */
-export const inject = ['slots', 'locale', 'settingsScope']
+/** 必需服务：槽位注册表、文案与 DSH 插件配置表单。 */
+export const inject = ['slots', 'locale', 'configForms']
 
 /**
  * 插件体：注册词典、两处槽位与模型清单读取。
@@ -26,12 +24,28 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ob-agent: dictionaries')
   const t = ctx.locale.bind(NS)
 
-  const binder = ctx.get('settingsScope') as SettingsScopeBinderLike | undefined
-  if (binder === undefined) {
-    console.error('[dsh-ob-agent] settingsScope 服务不可用：界面未注册（请确认 ui-settings 已装配）')
+  const forms = ctx.get('configForms') as ConfigFormsLike | undefined
+  if (forms === undefined) {
+    console.error('[dsh-ob-agent] configForms 服务不可用：界面未注册（请确认 ui-settings 已装配）')
     return
   }
-  const scope = binder.bind<ObAgentWire>({ namespace: OB_AGENT_NAMESPACE })
+  const form = forms.get('dsh-ob-agent')
+  const scope: ClientSettingsScope<ObAgentWire> = {
+    getSnapshot() {
+      const snapshot = form.getSnapshot()
+      return { ...snapshot, value: snapshot.value as ObAgentWire | undefined }
+    },
+    subscribe: listener => form.subscribe(listener),
+    async set(field, value) {
+      return requireAccepted(await form.set(field, value))
+    },
+    async unset(field) {
+      return requireAccepted(await form.unset(field))
+    },
+    async mutate(ops) {
+      return requireAccepted(await form.mutate(ops))
+    },
+  }
 
   // 每个会话一个设置桥；插件卸载时统一释放订阅。
   const stores = new Map<string, ObAgentStore>()
@@ -88,4 +102,8 @@ export function apply(ctx: ClientContext): void {
       }
     },
   }, ObAgentSection))
+}
+
+function requireAccepted(accepted: boolean): void {
+  if (!accepted) throw new Error('DSH 未接受插件配置写入，请刷新页面后重试')
 }

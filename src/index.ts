@@ -2,18 +2,17 @@
  * dsh-ob-agent 主机插件：把 DSH 的全部 agent 类工具收口到一处统一管理。
  *
  * 职责：
- * - 注册设置命名空间 `ob-agent`（条目表、闸门名单、自助管理开关等）；
+ * - 读取插件 live Config `section`（条目表、闸门名单、自助管理开关等）；
  * - 在 `agent/created` 上为每个 agent 建立协调状态：执行层守卫 + 隐藏层 +
  *   按勾选装配工具 + 每会话的「Agent 工具信息」系统提示段；
  * - 设置变更、工具集变更、agent 生命周期变化时重算（幂等，只增删差异项）。
  *
- * 会话级选择存放在设置段的 `sessions` 映射里（键为会话 id），由浏览器经
- * `ctx.settingsScope` 写入；主机只读它，因此不需要自定义 Remote、投影或 HTTP 路由。
+ * 会话级选择存放在 Config `section.sessions` 映射里（键为会话 id），由浏览器经
+ * `configForms` 写入；主机读取同一份 live Config。
  */
-import type { AgentLike, AgentRegistryLike, HostContext, HostSettingsScope, SettingsServiceLike } from './context-types.ts'
-import { DEFAULT_SECTION, DEFAULTS_REVISION } from './defaults.ts'
-import { readSection, storedRevision } from './normalize.ts'
-import { registerSettings } from './settings.ts'
+import type { AgentLike, AgentRegistryLike, ConfigEditorLike, HostContext } from './context-types.ts'
+import { readSection } from './normalize.ts'
+import { Config, type PluginConfig } from './settings.ts'
 import { disposeAgent, reconcileAgent, type ReconcileDeps } from './reconcile.ts'
 import type { ObAgentSection } from './contract.ts'
 
@@ -23,19 +22,19 @@ export const name = 'dsh-ob-agent'
 /** 必需服务：全部按需注入（见 apply），因此这里声明为空。 */
 export const inject: string[] = []
 
-/** 配置：本插件没有 Loader 侧配置，全部走设置命名空间。 */
-export interface Config {}
+/** 配置由 Schemastery 的 Config 导出定义。 */
+export { Config }
 
 /**
  * 插件体。
  * @param ctx - 主机 cordis 上下文。
  */
-export function apply(ctx: HostContext): void {
-  let scope: HostSettingsScope<unknown> | undefined
-  let section: ObAgentSection = DEFAULT_SECTION
+export function apply(ctx: HostContext, config: PluginConfig): void {
+  let section: ObAgentSection = readPluginConfig(config)
+  let scope: { update(patch: object): Promise<void> } | undefined
   let queued = false
 
-  /** 读取当前设置段（设置未就绪时给出厂默认）。 */
+  /** 读取当前 live Config（设置未就绪时给出厂默认）。 */
   const read = (): ObAgentSection => section
 
   const deps: ReconcileDeps = {
@@ -73,52 +72,39 @@ export function apply(ctx: HostContext): void {
     })
   }
 
-  // 设置命名空间：可选服务（没有 settings 时插件仍以出厂默认工作，只是无法持久化）。
-  ctx.inject(['settings'], (settingsCtx) => {
-    const settings = settingsCtx.get('settings') as SettingsServiceLike | undefined
-    if (settings === undefined) {
-      ctx.logger.warn('dsh-ob-agent: 设置服务不可用，条目改为只读的出厂默认')
+  ctx.on('settings/document-updated', (entryId: string) => {
+    if (entryId !== 'dsh-ob-agent') return
+    const parsed = readPluginConfig(config)
+    const errors = validate(parsed)
+    if (errors.length > 0) {
+      ctx.logger.warn(`dsh-ob-agent: 插件配置存在问题（已按可用部分继续）：${errors.join('；')}`)
+    }
+    section = parsed
+    schedule()
+  })
+
+  ctx.inject(['configEditor'], (editorCtx) => {
+    const editor = editorCtx.get('configEditor') as ConfigEditorLike | undefined
+    const entry = ctx.fiber?.entry
+    if (editor === undefined || entry === undefined) {
+      ctx.logger.warn('dsh-ob-agent: 配置编辑器不可用，模型自助管理暂不可写')
       return
     }
-    const registered = registerSettings(settings)
-    scope = registered
-    const stored = registered.get()
-    section = readSection(stored)
-    // settings 服务可能在 apply() 之后才就绪：此时首次 reconcile 已用出厂默认跑过，
-    // 必须再触发一次，否则早于设置就绪创建的 agent 会停在出厂默认上。
-    schedule()
-    // 历史设置段（版本落后于出厂默认）在内存里已经迁移完毕，这里把它落盘。
-    // 三个字段必须一笔写入：只写版本号会让旧的内置条目永久留在文件里，只写条目表
-    // 又会让改名条目的会话勾选在下次读取时被封存（读取只在版本落后时才迁移）。
-    if (storedRevision(stored) < DEFAULTS_REVISION) {
-      void registered.update({
-        defaultsRevision: DEFAULTS_REVISION,
-        entries: section.entries,
-        sessions: section.sessions,
-      }).then(() => {
-        ctx.logger.info(
-          `dsh-ob-agent: 出厂默认已迁移到第 ${DEFAULTS_REVISION} 版（内置条目与会话选择已同步）`,
-        )
-      }).catch((error: unknown) => {
-        ctx.logger.warn(
-          `dsh-ob-agent: 迁移结果落盘失败（内存中已按新默认工作，重启后会重试）：`
-          + `${error instanceof Error ? error.message : String(error)}`,
-        )
-      })
+    const writer = {
+      update: async (patch: object): Promise<void> => {
+        await editor.edit(entry, current => ({
+          ...current,
+          ...patch,
+        }))
+      },
     }
-    settingsCtx.effect(() => registered.watch((next) => {
-      const parsed = readSection(next)
-      const errors = validate(parsed)
-      if (errors.length > 0) {
-        ctx.logger.warn(`dsh-ob-agent: 设置段存在问题（已按可用部分继续）：${errors.join('；')}`)
-      }
-      section = parsed
+    editorCtx.effect(() => {
+      scope = writer
       schedule()
-    }), 'dsh-ob-agent: settings watch')
-    settingsCtx.effect(() => () => {
-      scope = undefined
-      section = DEFAULT_SECTION
-    }, 'dsh-ob-agent: settings release')
+      return () => {
+        if (scope === writer) scope = undefined
+      }
+    }, 'dsh-ob-agent: config editor')
   })
 
   // agent 生命周期：创建即装配；销毁即释放（协调状态同时由 WeakMap 回收）。
@@ -148,6 +134,21 @@ export function apply(ctx: HostContext): void {
 
   // 首次装配：已有 agent（HMR / 重新挂载）也要纳入管理。
   schedule()
+}
+
+function readPluginConfig(config: PluginConfig): ObAgentSection {
+  return readSection({
+    defaultsRevision: config.defaultsRevision.get(),
+    masterEnabledDefault: config.masterEnabledDefault.get(),
+    readOnlyTools: config.readOnlyTools.get(),
+    promptVariables: config.promptVariables.get(),
+    autoEnableControlWithContinuable: config.autoEnableControlWithContinuable.get(),
+    gate: config.gate.get(),
+    authoring: config.authoring.get(),
+    modelGuide: config.modelGuide.get(),
+    entries: config.entries.get(),
+    sessions: config.sessions.get(),
+  })
 }
 
 /** 校验设置段的最小不变量；只告警不阻断（用户的半成品配置不应让插件失效）。 */

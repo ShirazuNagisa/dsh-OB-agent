@@ -40,7 +40,7 @@ export const zh = {
   'settings.discard': '放弃修改',
   'settings.dirty': '有未保存的修改',
   'settings.invalid': '校验未通过，未提交',
-  'settings.unavailable': '设置命名空间不可用：请确认插件已安装到 profile 并重启 DSH。',
+  'settings.unavailable': '插件配置不可用：请确认插件已安装到 profile 并重启 DSH。',
   'settings.global': '全局',
   'settings.masterDefault': '新会话默认打开总开关',
   'settings.masterDefaultDesc': '只影响新会话的初始状态；已有会话的选择记录保持不变。',

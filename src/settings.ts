@@ -1,32 +1,33 @@
 /**
- * 设置命名空间 `ob-agent` 的 host 侧：schemastery 模式、注册、写入。
- *
- * 模式刻意宽松（复杂字段用 `z.any()`）：真实校验在 `normalize.ts` 里用 TypeScript
- * 完成并给出中文原因；这样一次非法写入不会让整个命名空间解析失败（那会连带设置页
- * 不可用）。缺省字段由 `readSection` 补齐，因此 `replace({})` 就是「恢复出厂」。
- *
- * 本文件 import schemastery，**只能被 host 半引用**（浏览器 bundle 无法 require 它）；
- * 纯逻辑都在 `normalize.ts`。
+ * 插件自身的 live Config。新 DSH 通过 `configForms` 读取并写入易变配置；
+ * 复杂字段的语义校验仍由 `normalize.ts` 完成。
  */
 import z from '@deepseek-ai/schemastery'
-import { OB_AGENT_NAMESPACE } from './contract.ts'
-import type { HostSettingsScope, SettingsServiceLike } from './context-types.ts'
+import { DEFAULT_SECTION } from './defaults.ts'
 
-/** 设置段模式：结构合法即可，语义校验交给 `normalize.ts`。 */
-export const SECTION_SCHEMA = z.object({
-  defaultsRevision: z.number(),
-  masterEnabledDefault: z.boolean(),
-  readOnlyTools: z.array(z.string()),
-  promptVariables: z.array(z.string()),
-  autoEnableControlWithContinuable: z.boolean(),
-  gate: z.any(),
-  authoring: z.any(),
-  modelGuide: z.any(),
-  entries: z.any(),
-  sessions: z.any(),
+/** DSH 以易变引用传入 section，写入时由 profile Config Editor 校验并持久化。 */
+export const Config = z.object({
+  defaultsRevision: z.number().default(DEFAULT_SECTION.defaultsRevision).volatile(),
+  masterEnabledDefault: z.boolean().default(DEFAULT_SECTION.masterEnabledDefault).volatile(),
+  readOnlyTools: z.array(z.string()).default(DEFAULT_SECTION.readOnlyTools).volatile(),
+  promptVariables: z.array(z.string()).default(DEFAULT_SECTION.promptVariables).volatile(),
+  autoEnableControlWithContinuable: z.boolean().default(DEFAULT_SECTION.autoEnableControlWithContinuable).volatile(),
+  gate: z.any().default(DEFAULT_SECTION.gate).volatile(),
+  authoring: z.any().default(DEFAULT_SECTION.authoring).volatile(),
+  modelGuide: z.any().default(DEFAULT_SECTION.modelGuide).volatile(),
+  entries: z.any().default(DEFAULT_SECTION.entries).volatile(),
+  sessions: z.any().default(DEFAULT_SECTION.sessions).volatile(),
 })
 
-/** 注册本插件的设置命名空间，返回属主句柄。 */
-export function registerSettings(settings: SettingsServiceLike): HostSettingsScope<unknown> {
-  return settings.register<unknown>(OB_AGENT_NAMESPACE, SECTION_SCHEMA)
+export interface PluginConfig {
+  defaultsRevision: { get(): unknown }
+  masterEnabledDefault: { get(): unknown }
+  readOnlyTools: { get(): unknown }
+  promptVariables: { get(): unknown }
+  autoEnableControlWithContinuable: { get(): unknown }
+  gate: { get(): unknown }
+  authoring: { get(): unknown }
+  modelGuide: { get(): unknown }
+  entries: { get(): unknown }
+  sessions: { get(): unknown }
 }

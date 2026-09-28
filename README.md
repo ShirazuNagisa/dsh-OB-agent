@@ -33,7 +33,7 @@ src/
   implement.ts     纯函数：条目 → 实装动作（档 A 放行 / 档 B 重挂 / 档 C 不可用）
   reconcile.ts     每 agent 协调器：隐藏层 + 执行层 + 重挂层，幂等差异应用
   authoring.ts     模型自助管理工具（agent_create / agent_update / agent_list）
-  settings.ts      host 侧设置命名空间（schemastery 模式，仅 host 引用）
+  settings.ts      host 侧 live Config schema（schemastery 模式，仅 host 引用）
   docpath.ts       面向模型的文档定位与注入方式
   context-types.ts 所消费服务的结构面（第三方插件不共享 DSH 的 cordis 实例）
   vendor.d.ts      运行期由 profile 解析的 DSH 包的最小声明
@@ -58,8 +58,8 @@ npm run check        # 以上三件一起
 
 ## 设计要点
 
-1. **会话选择不进会话日志**：存在设置命名空间的 `sessions` 映射（键 = 会话 id），因此界面
-   与主机读同一份快照，不需要自定义 Remote / 投影 / HTTP 路由。
+1. **会话选择不进会话日志**：存在插件 live Config 的 `sessions` 映射（键 = 会话 id），
+   因此界面与主机读同一份配置，不需要自定义 Remote / 投影 / HTTP 路由。
 2. **闸门三层**：隐藏层只作用于继承面（`restrict` 拒绝 scope-local 名字），自有层重挂的
    工具靠执行层守卫兜住 —— 两层缺一不可。
 3. **幂等差异应用**：每次重算先算目标指纹集合，只增删差异项，因此插件自身触发的

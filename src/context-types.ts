@@ -94,19 +94,6 @@ export interface SystemPromptLike {
   getSectionOrder(name: string): number
 }
 
-/** 主机设置：一个命名空间的属主句柄。 */
-export interface HostSettingsScope<T> {
-  get(): T
-  watch(callback: (next: T, prev: T) => void | Promise<void>): Disposer
-  update(patch: object): Promise<void>
-  replace(section: object): Promise<void>
-}
-
-/** 设置服务（`ctx.get('settings')`）：注册命名空间并取回属主句柄。 */
-export interface SettingsServiceLike {
-  register<T>(namespace: string, schema: unknown, options?: { base?: object }): HostSettingsScope<T>
-}
-
 /** 日志面。 */
 export interface LoggerLike {
   info(message: string): void
@@ -117,10 +104,19 @@ export interface LoggerLike {
 /** 主机 Context 的最小结构面（本插件实际用到的成员）。 */
 export interface HostContext {
   readonly logger: LoggerLike
+  readonly fiber?: { readonly entry?: unknown }
   get(name: string): unknown
   inject(services: readonly string[], callback: (ctx: HostContext) => void): Fiber
   effect(callback: () => void | Disposer, label?: string): Fiber
   on(event: string, listener: (...args: never[]) => void): Disposer
+}
+
+/** Host profile configuration editor. */
+export interface ConfigEditorLike {
+  edit(
+    entry: unknown,
+    change: (current: Record<string, unknown>, inherited: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<void>
 }
 
 /** 浏览器侧可观察源：`hooks: { x: source }` 会绑定成组件的 `useX` 钩子。 */
@@ -129,7 +125,7 @@ export interface ObservableLike<T> {
   subscribe(listener: () => void): Disposer
 }
 
-/** 浏览器设置命名空间句柄（`ctx.settingsScope.bind(spec)`）。 */
+/** 浏览器配置表单句柄（`ctx.configForms.get(entryId)`）。 */
 export interface ClientSettingsScope<T> {
   getSnapshot(): {
     readonly status: 'loading' | 'ready' | 'unavailable'
@@ -144,9 +140,24 @@ export interface ClientSettingsScope<T> {
   mutate(ops: readonly { op: 'set' | 'unset'; path: readonly string[]; value?: unknown }[]): Promise<void>
 }
 
-/** 浏览器设置绑定服务（`ctx.get('settingsScope')`）。 */
-export interface SettingsScopeBinderLike {
-  bind<T>(spec: { namespace: string; decode?: (section: unknown) => T | undefined }): ClientSettingsScope<T>
+/** DSH 配置表单。 */
+export interface ConfigFormLike {
+  getSnapshot(): {
+    readonly status: 'loading' | 'ready' | 'unavailable'
+    readonly value: Record<string, unknown> | undefined
+    readonly revision: number | undefined
+    readonly writable: boolean
+    readonly mode: 'host' | 'memory'
+  }
+  subscribe(listener: () => void): Disposer
+  set(field: string, value: unknown): Promise<boolean>
+  unset(field: string): Promise<boolean>
+  mutate(ops: readonly { op: 'set' | 'unset'; path: readonly string[]; value?: unknown }[]): Promise<boolean>
+}
+
+/** DSH 配置表单服务。 */
+export interface ConfigFormsLike {
+  get<T>(entryId: string): ConfigFormLike
 }
 
 /** 槽位注册面（`ctx.slots`）。 */

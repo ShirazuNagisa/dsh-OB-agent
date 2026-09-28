@@ -6,6 +6,12 @@
 - 面向模型的说明：`model-guide.md`（同一目录）
 - 面向本插件的维护者：`../README.md`
 
+## DSH 0.1.7 兼容
+
+DSH 0.1.7 将浏览器设置接口从 `settingsScope` 切换到 `configForms`，并要求 Host 插件通过 live Config 暴露可编辑字段。本插件已将设置迁至自身 `dsh-ob-agent` 配置项，浏览器与 Host 共用同一份 profile 配置。
+
+从旧版本升级时，原 `ob-agent` 命名空间可能留在 `~/.dsh/settings.yaml.imported`。把该段迁入 `~/.dsh/profiles/web/cordis.patch.yml` 中 `id: dsh-ob-agent` 的 `config`，保留全部字段，尤其是 `entries` 与 `sessions`；迁移后重启 DSH 并硬刷新页面。
+
 ---
 
 ## 1. 它解决什么问题
@@ -114,7 +120,7 @@ Switch / Button / Tag / Menu / Tooltip / DisclosureRow 与官方图标），配�
 
 ### 4.3 会话选择存在哪里
 
-会话级选择存放在设置命名空间的 `sessions` 映射（键 = 会话 id）：
+会话级选择存放在插件配置 `sessions` 映射（键 = 会话 id）：
 
 - 好处：不需要自定义 Remote / 投影 / HTTP 路由，界面与主机读同一份快照；
 - 代价：它是**配置文件里的会话状态**，会按最近使用裁剪（上限 120 条会话）；
@@ -224,7 +230,7 @@ Switch / Button / Tag / Menu / Tooltip / DisclosureRow 与官方图标），配�
 | 现象 | 排查 |
 | --- | --- |
 | 聊天框看不到「子代理」面板 | 客户端 bundle 未加载：重启 DSH 后 Ctrl+F5；查看控制台是否有 `[dsh-ob-agent]` 报错。 |
-| 聊天框看不到面板、设置页显示「设置命名空间不可用」 | 设置命名空间 `ob-agent` 未注册：确认插件在 `dsh.profile.bundles` 里且 DSH 已重启。 |
+| 聊天框看不到面板、设置页显示「设置命名空间不可用」 | 插件配置表单不可用：确认 `@deepseek-ai/dsh-client-ui-settings` 已装配、插件在 `dsh.profile.bundles` 里且 DSH 已重启。 |
 | 勾选后工具仍不出现 | 看 DSH 日志里的 `dsh-ob-agent:` 中文告警（实现包加载失败 / 缺 workflowEngine / 只读交集为空 / provider 未注册）。 |
 | 模型说工具被拒绝 | 总开关或条目未勾选（守卫的中文拒绝信息会说明）。 |
 | `workflow` 显示不可用 | 该会话预设没有装配 `@deepseek-ai/dsh-workflow-worker-thread`（缺 `workflowEngine` 服务）。 |

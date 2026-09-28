@@ -2,11 +2,12 @@
  * 共享契约：主机（host）与浏览器（client）两半共用的类型、常量与纯函数。
  *
  * 会话级选择存放在设置命名空间的 `sessions` 映射里（键为会话 id），因此浏览器只需
- * 走已有的 `ctx.settingsScope` 写入通道即可，不需要自定义 Remote、投影或 HTTP 路由。
+ * 会话选择与全局设置保存在插件 live Config 的 `section` 字段中，由 `configForms` 同步，
+ * 不需要自定义 Remote、投影或 HTTP 路由。
  * 主机侧在每次模型请求前读取同一份映射来决定闸门拒绝集与可见工具集。
  */
 
-/** 设置命名空间名。 */
+/** 旧版 DSH 设置文档使用的命名空间名，供数据迁移参考。 */
 export const OB_AGENT_NAMESPACE = 'ob-agent'
 
 /** 系统提示段名（每个 agent 作用域各注册一份，同名遮蔽）。 */

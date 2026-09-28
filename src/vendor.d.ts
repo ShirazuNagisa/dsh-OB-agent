@@ -68,6 +68,8 @@ declare module '@deepseek-ai/schemastery' {
   export interface SchemasterySchema {
     (value: unknown): unknown
     toString(): string
+    default(value: unknown): SchemasterySchema
+    volatile(): SchemasterySchema
   }
   export interface Schemastery {
     object(shape: Record<string, unknown>): SchemasterySchema

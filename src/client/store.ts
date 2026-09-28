@@ -1,8 +1,8 @@
 /**
- * 浏览器侧的状态桥：把设置命名空间快照归一化成界面直接可用的形状。
+ * 浏览器侧的状态桥：把插件配置快照归一化成界面直接可用的形状。
  *
- * 会话选择存在设置段的 `sessions` 映射里（键为会话 id），因此这里不需要自定义
- * Remote / 投影 / HTTP 路由——写入直接走宿主已有的 settingsScope 通道，读取走同一
+ * 会话选择存在配置段的 `sessions` 映射里（键为会话 id），因此这里不需要自定义
+ * Remote / 投影 / HTTP 路由——写入直接走宿主已有的 configForms 通道，读取走同一
  * 份快照，天然与主机看到的状态一致。
  */
 import {
@@ -46,7 +46,7 @@ function messageOf(error: unknown): string {
 
 /**
  * 建立设置桥。
- * @param scope - 已绑定的设置命名空间句柄。
+ * @param scope - 插件配置的字段读写句柄。
  * @param sessionId - 会话 id；设置页与主机侧全局判断可传空串（只会命中默认选择）。
  */
 export function createObAgentStore(scope: ClientSettingsScope<ObAgentWire>, sessionId: string): ObAgentStore {
