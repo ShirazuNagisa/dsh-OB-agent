@@ -6,6 +6,7 @@
  */
 import type { ClientContext, ClientSettingsScope, ConfigFormsLike } from '../context-types.ts'
 import { ObAgentDock, type ObAgentDockInjected } from './dock.tsx'
+import { missingHostComponents } from './host-ui.tsx'
 import { NS, en, zh } from './locales.ts'
 import { loadModelCatalog, type ModelCatalogResult } from './modelcatalog.ts'
 import { ObAgentSection, type ObAgentSectionInjected } from './section.tsx'
@@ -20,6 +21,16 @@ export const inject = ['slots', 'locale', 'configForms']
  * @param ctx - 浏览器 cordis 上下文。
  */
 export function apply(ctx: ClientContext): void {
+  // 宿主组件自检只告警、不拦截：真缺件时 React 也只是摘掉本插件那一个槽位条目，
+  // 而「因为自检就不注册」会让整个界面消失，是更糟的失败模式。
+  const missingHost = missingHostComponents()
+  if (missingHost.length > 0) {
+    console.error(
+      `[dsh-ob-agent] 宿主 UI 组件不兼容（未解析到 ${missingHost.join('、')}）：界面可能渲染失败，`
+      + '请把本插件的 @deepseek-ai/dsh-client-ui-primitives 与 DSH 版本对齐后重新构建',
+    )
+  }
+
   adoptStyles()
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-ob-agent: dictionaries')
   const t = ctx.locale.bind(NS)

@@ -14,12 +14,6 @@ import { useEffect, useState } from 'react'
 import {
   Button,
   DisclosureRow,
-  IconChevronDownOutline14,
-  IconChevronUpOutline14,
-  IconCopyOutline16,
-  IconPlusOutline16,
-  IconSettingsOutline14,
-  IconTrashOutline16,
   Menu,
   Switch,
   Tag,
@@ -36,6 +30,7 @@ import {
 import type { ObservableLike } from '../context-types.ts'
 import { DEFAULT_SECTION } from '../defaults.ts'
 import { validateSection } from '../normalize.ts'
+import { IconChevronDown, IconChevronUp, IconCopy, IconPlus, IconSettings, IconTrash } from './host-ui.tsx'
 import type { ObAgentKey } from './locales.ts'
 import type { ModelCatalogResult } from './modelcatalog.ts'
 import type { ObAgentSnapshot } from './store.ts'
@@ -316,7 +311,7 @@ function EntryCard(props: {
             size="sm"
             variant="ghost"
             className="dsh_obAgent_iconBtn"
-            icon={<IconChevronUpOutline14 />}
+            icon={<IconChevronUp />}
             disabled={props.disabled || props.index === 0}
             title={t('settings.entry.up')}
             aria-label={t('settings.entry.up')}
@@ -326,7 +321,7 @@ function EntryCard(props: {
             size="sm"
             variant="ghost"
             className="dsh_obAgent_iconBtn"
-            icon={<IconChevronDownOutline14 />}
+            icon={<IconChevronDown />}
             disabled={props.disabled || props.index === props.total - 1}
             title={t('settings.entry.down')}
             aria-label={t('settings.entry.down')}
@@ -335,7 +330,7 @@ function EntryCard(props: {
           <Button
             size="sm"
             variant="outline"
-            icon={<IconCopyOutline16 />}
+            icon={<IconCopy />}
             disabled={props.disabled}
             onClick={props.onDuplicate}
           >
@@ -345,7 +340,7 @@ function EntryCard(props: {
             size="sm"
             variant="ghost"
             className="dsh_obAgent_danger"
-            icon={<IconTrashOutline16 />}
+            icon={<IconTrash />}
             disabled={props.disabled}
             onClick={props.onRemove}
           >
@@ -747,7 +742,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
               <Button
                 size="sm"
                 variant="outline"
-                icon={<IconPlusOutline16 />}
+                icon={<IconPlus />}
                 disabled={disabled || current.entries.length >= current.authoring.maxEntries}
                 onClick={() => { editEntries([...current.entries, newEntry(t)]) }}
               >
@@ -842,7 +837,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
 
         <li className="dsh_obAgent_card">
           <DisclosureRow
-            icon={<IconSettingsOutline14 />}
+            icon={<IconSettings />}
             title={t('settings.gate')}
             open={gateOpen}
             expandable

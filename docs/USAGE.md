@@ -8,7 +8,29 @@
 
 ## DSH 0.1.7 兼容
 
-DSH 0.1.7 将浏览器设置接口从 `settingsScope` 切换到 `configForms`，并要求 Host 插件通过 live Config 暴露可编辑字段。本插件已将设置迁至自身 `dsh-ob-agent` 配置项，浏览器与 Host 共用同一份 profile 配置。
+DSH 0.1.7 有两处破坏性变更，本插件都已适配：
+
+1. **设置接口**：浏览器设置接口从 `settingsScope` 切换到 `configForms`，并要求 Host 插件通过
+   live Config 暴露可编辑字段（字段要标 `.volatile()`，否则写入会被 Host 拒绝）。本插件已将
+   设置迁至自身 `dsh-ob-agent` 配置项，浏览器与 Host 共用同一份 profile 配置。
+2. **UI 图标命名**：产品图标从 `Icon<名>Outline<尺寸>`（例如 `IconPlusOutline16`）改为
+   `Icon<名>OutlineRegular / Medium`（1px / 1.3px 描边），尺寸改由 `size` 属性表达。
+   旧名字在新版里**不存在**，而客户端 bundle 把 UI 组件库当外部依赖在运行期加载 —— 缺失的
+   导入就是 `undefined`，React 一渲染就抛错，槽位条目随后被摘除。**症状是聊天框的「子代理」
+   条不出现、设置页「子代理」整片空白，控制台之外没有任何线索。** 适配集中在
+   `src/client/host-ui.tsx`：新名优先、旧名兜底，同一份产物在新旧 DSH 上都能渲染。
+
+改这一层时有两条硬约束，都是踩过的坑：
+
+- **只用具名导入**。宿主交给插件的模块对象不保证可以被属性枚举：`import * as ns` 走过打包器
+  的名字空间副本，副本可能是**空的**，于是按名字查表会把完全正常的宿主误判成「缺件」。
+  具名导入走模块系统自己的解析路径，没有这个风险。
+- **自检只告警、绝不因此放弃注册**。缺一个图标的代价是那一处空着，而「因为自检就不注册」
+  会让整个界面消失 —— 重启后连设置页的「子代理」导航项都没有，就是这个失败模式。
+
+升级 DSH 时，请把开发依赖 `@deepseek-ai/dsh-client-ui-primitives` 一并升到同一版本：现代命名
+走具名导入，名字被改掉时 `npm run typecheck` 会直接失败；旧命名由 `src/client/legacy-icons.d.ts`
+补声明，同样只是具名导入，在新宿主上取到 `undefined` 而不是加载错误。
 
 从旧版本升级时，原 `ob-agent` 命名空间可能留在 `~/.dsh/settings.yaml.imported`。把该段迁入 `~/.dsh/profiles/web/cordis.patch.yml` 中 `id: dsh-ob-agent` 的 `config`，保留全部字段，尤其是 `entries` 与 `sessions`；迁移后重启 DSH 并硬刷新页面。
 
@@ -44,6 +66,26 @@ pnpm install
 ```
 
 > 插件作者未声明免重启生效，因此安装/更新后必须重启 DSH。
+
+### 2.1 改了插件代码，界面却没变化？
+
+运行中的 DSH 用的是 profile 里**独立的一份副本**（`~/.dsh/profiles/web/node_modules/dsh-ob-agent`），
+`npm run build` 只写仓库的 `lib/`。只构建不同步的话，症状与「代码没修好」一模一样：行为完全没变。
+正确的更新顺序是：
+
+```powershell
+# 1) 仓库里构建（typecheck + 测试 + 三份产物）
+cd C:\Users\17737\Code\other\DSH\plugins\dsh-OB-agent
+npm run check
+# 2) 让 profile 拿到新产物（二选一）
+cd C:\Users\17737\.dsh\profiles\web
+pnpm install                    # 重新链接 file: 依赖，推荐
+# 或者只同步产物，速度更快：
+# Copy-Item "<仓库>\lib\*" "C:\Users\17737\.dsh\profiles\web\node_modules\dsh-ob-agent\lib\" -Recurse -Force
+# 3) 浏览器 Ctrl+F5；若界面仍无变化再重启 DSH 进程
+```
+
+判断是否同步成功：比较两边 `lib/client.js` 的哈希，或看 profile 副本的修改时间。
 
 ## 3. 界面
 
@@ -230,6 +272,8 @@ Switch / Button / Tag / Menu / Tooltip / DisclosureRow 与官方图标），配�
 | 现象 | 排查 |
 | --- | --- |
 | 聊天框看不到「子代理」面板 | 客户端 bundle 未加载：重启 DSH 后 Ctrl+F5；查看控制台是否有 `[dsh-ob-agent]` 报错。 |
+| 面板不出现**且**设置页「子代理」整片空白 | 典型是宿主 UI 库不匹配（DSH 升级后图标改名/组件改名）：打开浏览器控制台找 `[dsh-ob-agent] 宿主缺少图标 …` 或 `宿主 UI 组件不兼容（未解析到 …）`，按提示把 DSH 与本插件的 `@deepseek-ai/dsh-client-ui-primitives` 版本对齐后重新 `npm run build`。 |
+| 设置页连「子代理」导航项都没有 | 客户端插件没注册：看控制台是否有 `[dsh-ob-agent] configForms 服务不可用`（`@deepseek-ai/dsh-client-ui-settings` 未装配），否则属于客户端 bundle 未加载/加载失败 —— 确认 profile 副本已同步最新产物，再硬刷新页面。 |
 | 聊天框看不到面板、设置页显示「设置命名空间不可用」 | 插件配置表单不可用：确认 `@deepseek-ai/dsh-client-ui-settings` 已装配、插件在 `dsh.profile.bundles` 里且 DSH 已重启。 |
 | 勾选后工具仍不出现 | 看 DSH 日志里的 `dsh-ob-agent:` 中文告警（实现包加载失败 / 缺 workflowEngine / 只读交集为空 / provider 未注册）。 |
 | 模型说工具被拒绝 | 总开关或条目未勾选（守卫的中文拒绝信息会说明）。 |
@@ -249,6 +293,7 @@ Switch / Button / Tag / Menu / Tooltip / DisclosureRow 与官方图标），配�
 - 模型自助管理只能受限于设置里的上限与作用域，不能限制它写什么提示词内容 —— 审计日志与
   「模型自建」标记是主要的事后控制手段。
 - 客户端 bundle 在顶层 `require` DSH 的 UI 组件库（`@deepseek-ai/dsh-client-ui-primitives`）。
-  当前版本确认由 shell 提供该共享模块，因此没有做降级保护；若将来某个 DSH 版本/裁剪版不再
-  提供它，面板与设置页会一起加载失败。届时把两个组件的 import 改成惰性探测即可（普通
-  `require` 之外没有运行期保护，`package.json` 里的 `optional` 只在安装期生效）。
+  该共享模块目前由 shell 提供，运行期不做「模块是否整体存在」的兜底；能做的是两层保护：
+  `src/client/host-ui.tsx` 解析单个图标时缺失就退化为空占位（一个图标没了不会带走整块界面），
+  `apply` 入口自检结构组件并打印中文原因 —— **只告警，不跳过注册**（跳过注册会让整个界面
+  消失，是更糟的失败模式）。若某个 DSH 版本/裁剪版整体不再提供该模块，按控制台提示对齐版本。

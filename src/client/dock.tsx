@@ -14,16 +14,10 @@
  * 避免多窗口/多标签下显示与主机不一致。
  */
 import { useEffect, useRef, useState } from 'react'
-import {
-  IconAgentPresetOutline16,
-  IconChevronDownOutline14,
-  Switch,
-  Tag,
-  Tooltip,
-  type TagTone,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Switch, Tag, Tooltip, type TagTone } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isDshProvidedEntry, type ObAgentEntry, type ObAgentSessionState } from '../contract.ts'
 import type { ObservableLike } from '../context-types.ts'
+import { IconAgentPreset, IconChevronDown } from './host-ui.tsx'
 import type { ObAgentKey } from './locales.ts'
 import type { ObAgentSnapshot } from './store.ts'
 
@@ -150,12 +144,12 @@ export function ObAgentDock(props: ObAgentDockProps): JSX.Element | null {
             title={t('dock.hint')}
             onClick={() => { setExpanded(value => !value) }}
           >
-            <span className="dsh_obAgent_lead"><IconAgentPresetOutline16 /></span>
+            <span className="dsh_obAgent_lead"><IconAgentPreset /></span>
             <span className="dsh_obAgent_headLabel">{t('dock.title')}</span>
             <span className="dsh_obAgent_summary">{summary}</span>
             {session.enabled ? (
               <span className={`dsh_obAgent_chevron${open ? ' dsh_obAgent_chevronOpen' : ''}`}>
-                <IconChevronDownOutline14 />
+                <IconChevronDown />
               </span>
             ) : null}
           </button>
@@ -184,7 +178,7 @@ export function ObAgentDock(props: ObAgentDockProps): JSX.Element | null {
                   onClick={() => { setNativeOpen(value => !value) }}
                 >
                   <span className={`dsh_obAgent_chevron${nativeOpen ? ' dsh_obAgent_chevronOpen' : ''}`}>
-                    <IconChevronDownOutline14 />
+                    <IconChevronDown />
                   </span>
                   <span className="dsh_obAgent_groupTitle">{t('dock.nativeGroup')}</span>
                   <span className="dsh_obAgent_groupCount">

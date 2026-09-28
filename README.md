@@ -38,7 +38,9 @@ src/
   context-types.ts 所消费服务的结构面（第三方插件不共享 DSH 的 cordis 实例）
   vendor.d.ts      运行期由 profile 解析的 DSH 包的最小声明
   client/          浏览器半：dock（总开关+勾选）、设置页、设置桥、文案、样式
-tests/             153 项单元测试（纯函数层、设置桥、出厂默认迁移）
+  client/host-ui.tsx        宿主 UI 适配层：图标新旧命名（只走具名导入）+ 结构组件自检
+  client/legacy-icons.d.ts  0.1.5 时代的图标命名声明（模块增强，供旧宿主兜底）
+tests/             157 项单元测试（纯函数层、设置桥、出厂默认迁移、宿主 UI 适配）
 ```
 
 ## 开发
@@ -54,7 +56,15 @@ npm run check        # 以上三件一起
 - 运行期依赖（`@deepseek-ai/dsh-*`、`@deepseek-ai/schemastery`、`react`）由 DSH profile
   提供，构建时全部外部化；它们只发布在 DSH 自身的解析链上，因此**不作为开发依赖安装**
   （见 `src/vendor.d.ts` 顶部说明）。
+- **例外**：`@deepseek-ai/dsh-client-ui-primitives` 是可从 registry 安装的纯 UI 包，作为
+  开发依赖安装**只用于类型与图标名校验**（运行期仍由 shell 提供）。它必须与当前 DSH
+  版本保持一致：`src/client/host-ui.tsx` 用**具名导入**取宿主组件，名字被改掉时
+  `npm run typecheck` 直接失败，不会等到运行期界面静默消失。取用宿主 UI 一律走具名导入，
+  不要 `import * as ns` 后按名字查表 —— 宿主模块对象不保证可枚举，名字空间副本可能是空的。
 - `.npmrc` 关闭 peer 自动安装，避免本地安装去 registry 拉取未发布的 DSH 内部包。
+- 构建只写仓库的 `lib/`，而运行中的 DSH 读的是 profile 里的副本
+  （`~/.dsh/profiles/web/node_modules/dsh-ob-agent`）：改完代码要 `pnpm install` 重新链接，
+  或直接把 `lib/` 同步过去，否则界面行为一点都不会变（见 `docs/USAGE.md` 2.1）。
 
 ## 设计要点
 
