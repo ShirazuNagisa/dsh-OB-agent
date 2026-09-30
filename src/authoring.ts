@@ -118,6 +118,43 @@ const OUTPUT = {
     [{ type: 'text', text: String(value) }],
 } as const
 
+/**
+ * 把「字段名 → 字段定义」的属性表编译成**模型可见的 JSON Schema**。
+ *
+ * 为什么必须编译：上游 `ToolSchema.parameters` 的契约是「JSON Schema object for the
+ * arguments」，而 `{ 字段名: { type, required, description } }` 只是 `defineTool` 的
+ * **作者侧 DSL** —— 只有经上游 `parameterSchemaSpecToJsonSchema` 编译后才会变成模型看到的
+ * 形状。本插件刻意不依赖 `@deepseek-ai/dsh-tools`（它只发布在 DSH 自己的解析链上），
+ * 直接 `tools.register()` 裸定义，因此这一步得自己做。漏做不会报错，只会静默降级：
+ * Anthropic 系 provider 因为 `input_schema` 不是 object 而报错，OpenAI 系 provider 则把
+ * 每个字段名当成未知关键字，参数说明形同虚设（模型只能靠 description 猜参数名）。
+ *
+ * 只编译**一层**：本插件的参数表全是顶层标量/数组字段，`items` 之类的嵌套定义原样透传。
+ * 若将来加入嵌套对象字段，需要按上游语义递归编译（把内层 `required: true` 上提到内层
+ * `required` 数组），否则内层的 `required` 会变成 JSON Schema 里的未知关键字。
+ * @param properties - 字段名到字段定义的映射；`required: true` 表示该字段必填。
+ * @returns 根为 object 的 JSON Schema（与上游编译结果同形）。
+ */
+export function parameterSchemaOf(properties: Record<string, unknown>): Record<string, unknown> {
+  const required: string[] = []
+  const compiled: Record<string, unknown> = {}
+  for (const [name, spec] of Object.entries(properties)) {
+    if (spec === null || typeof spec !== 'object') {
+      // 形状不合预期时原样透传：交给注册方的校验去报错，本函数不制造新的失败点。
+      compiled[name] = spec
+      continue
+    }
+    const { required: isRequired, ...rest } = spec as { required?: unknown } & Record<string, unknown>
+    compiled[name] = rest
+    if (isRequired === true) required.push(name)
+  }
+  return {
+    type: 'object',
+    properties: compiled,
+    ...(required.length === 0 ? {} : { required }),
+  }
+}
+
 /** 由模型参数构造一条 `source: 'model'` 的条目；参数不成立时返回中文原因。 */
 export function entryFromArgs(args: Record<string, unknown>, base?: ObAgentEntry): ObAgentEntry | string {
   const id = typeof args.id === 'string' && args.id.trim() !== '' ? args.id.trim() : base?.id
@@ -200,7 +237,7 @@ export function authoringTools(deps: AuthoringDeps): ToolDefinitionLike[] {
     description:
       '新建一个可复用的 Agent 条目（子代理预设）并持久化。适用于会反复出现、值得固化成固定身份/权限/模型的委派任务；'
       + '一次性小任务不要建条目。创建成功后该子代理工具在「下一轮请求」才可用。',
-    parameters: CREATE_PARAMETERS,
+    parameters: parameterSchemaOf(CREATE_PARAMETERS),
     isConcurrencySafe: () => false,
     output: OUTPUT,
     async execute(args, exec): Promise<unknown> {
@@ -229,7 +266,7 @@ export function authoringTools(deps: AuthoringDeps): ToolDefinitionLike[] {
     description:
       '修改一个已有的 Agent 条目，只需给出要改的字段。默认只能修改模型自己创建的条目（来源为模型）；'
       + '修改内置或用户创建的条目会被拒绝。',
-    parameters: UPDATE_PARAMETERS,
+    parameters: parameterSchemaOf(UPDATE_PARAMETERS),
     isConcurrencySafe: () => false,
     output: OUTPUT,
     async execute(args, exec): Promise<unknown> {
@@ -267,7 +304,7 @@ export function authoringTools(deps: AuthoringDeps): ToolDefinitionLike[] {
     description:
       '列出当前全部 Agent 条目（含未勾选与模型自建项）：标识、名称、类型、来源、本会话是否启用、以及会暴露的工具名。'
       + '新建条目之前先用它查重。',
-    parameters: {},
+    parameters: parameterSchemaOf({}),
     isConcurrencySafe: () => true,
     output: OUTPUT,
     execute(_args, exec): Promise<unknown> {

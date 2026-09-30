@@ -42,8 +42,30 @@ src/
   client/          浏览器半：dock（总开关+勾选）、设置页、设置桥、文案、样式
   client/host-ui.tsx        宿主 UI 适配层：图标新旧命名（只走具名导入）+ 结构组件自检
   client/legacy-icons.d.ts  0.1.5 时代的图标命名声明（模块增强，供旧宿主兜底）
-tests/             197 项单元测试（纯函数层、设置桥、出厂默认迁移、宿主 UI 适配、子代理装配路径）
+tests/             214 项单元测试（纯函数层、设置桥、出厂默认迁移、宿主 UI 适配、子代理装配路径）
+  dsh-compat.spec.ts        跑在**真实 DSH 运行时**上的兼容性测试（找不到 DSH 时整组跳过）
 ```
+
+## DSH 版本兼容
+
+当前对齐 **DSH 0.2.0-rc.2**。`0.1.7-rc.2 → 0.2.0-rc.2` 之间，本插件消费的主机侧 API
+（`dsh-tools` 的 `register` / `restrict` / `guard` / `get` / `schemas`、`dsh-settings`、
+`dsh-system-prompt`、`dsh-agent-preset`）**逐字节未变**，客户端侧槽位、图标组件与设计令牌
+也全部仍在。本次随升级处理的三件事：
+
+1. `@deepseek-ai/dsh-workflow-worker-thread` 已下线（`workflowEngine` 改由
+   `@deepseek-ai/dsh-workflow` 提供）—— 清理了 `declare module`、`peerDependencies` 与告警文案；
+2. 模型自助管理工具的参数模式改为**模型可见的 JSON Schema**（原先误写成 `defineTool` 的
+   作者侧 DSL，Anthropic 系 provider 会直接拒绝）—— 见 `docs/USAGE.md`；
+3. `@deepseek-ai/dsh-client-ui-primitives` 开发依赖钉到 `0.2.0-rc.2`。
+
+升级后实测还发现并修掉一处**与版本无关的既有缺陷**：能力清单（系统提示段与 `list_agents`
+结果开头）原先按条目**声明**的工具名渲染，于是会把「本会话根本没装配上」的名字报给模型
+（实测：没提供 `subagent_hy4` 的预设下勾选「DSH 原生具名子代理」，清单照列、调用得到
+`unknown tool`）。现在清单读协调器的装配结论，落空的条目不再出现 —— 详见 `docs/USAGE.md` 4.6。
+
+**升级 DSH 后**：改 `devDependencies` 里的 primitives 版本 → `npm test`
+（`tests/dsh-compat.spec.ts` 会拿 profile 里的真实 DSH 包复核使用面）→ `npm run typecheck`。
 
 ## 开发
 

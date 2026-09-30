@@ -6,19 +6,58 @@
 - 面向模型的说明：`model-guide.md`（同一目录）
 - 面向本插件的维护者：`../README.md`
 
-## DSH 0.1.7 兼容
+## DSH 版本兼容
 
-DSH 0.1.7 有两处破坏性变更，本插件都已适配：
+### 0.1.7 → 0.2.0-rc.2 的结论：主机侧 API 无破坏性变更
+
+逐文件比对 `0.1.7-rc.2` 与 `0.2.0-rc.2` 的 `lib/`（含 `.d.ts`）后确认：本插件消费的
+`dsh-tools`（`register` / `restrict` / `guard` / `get` / `schemas`）、`dsh-settings`
+（volatile live Config + `configForms`）、`dsh-system-prompt`（`section` /
+`getSectionOrder('TOOL_SUBAGENT')`）、`dsh-agent-preset(-registry)` 的**实现逐字节未变**。
+客户端侧同样对齐：`conversation.input.dock` 与 `settings.section` 两个槽位仍在，
+`host-ui.tsx` 里具名导入的 7 个图标与 6 个结构组件在 `dsh-client-ui-primitives@0.2.0-rc.2`
+里全部存在，`styles.ts` 引用的 23 个设计令牌也全部仍在。
+
+本次升级真正影响本插件的有三点，都已处理：
+
+1. **`@deepseek-ai/dsh-workflow-worker-thread` 已下线**（最后发布 `0.1.5-rc.3`）。
+   `workflowEngine` 服务现由 `@deepseek-ai/dsh-workflow` 提供，`dsh-tool-workflow` 也只
+   peer 后者。仓库里对该包的 `declare module`、`peerDependencies` 条目与告警文案已清理；
+   profile 里那条指向已删除路径的悬空 junction 可以删掉，不影响功能。
+2. **属性表 ≠ JSON Schema**（见下节）：模型自助管理工具的 `parameters` 之前写成了
+   `defineTool` 的作者侧 DSL，已改为模型可见的 JSON Schema。
+3. 开发依赖 `@deepseek-ai/dsh-client-ui-primitives` 已钉到 `0.2.0-rc.2`，与实际宿主一致。
+
+### 升级 DSH 后怎么复核
+
+仓库里有一组**跑在真实 DSH 运行时上**的兼容性测试（`tests/dsh-compat.spec.ts`）：它用绝对
+路径动态导入 `~/.dsh/profiles/node_modules` 里的 `cordis` / `dsh-tools` / `dsh-system-prompt`
+等包，把本插件的**使用面假设**拿到上游实现上验证一遍（`restrict` 只接受继承面名字、
+`schemas(agent)` 的作用域语义、裸定义能被 `register` 接受且参数模式是 object 根 JSON Schema、
+四个工具包都还具名导出 `apply` / `name` 等）。找不到 DSH 时整组跳过，不影响普通 CI。
+
+```powershell
+npm test          # 兼容性测试会在有 DSH 的机器上自动跑起来
+# 装在别处时用环境变量指路：
+$env:DSH_PROFILE_NODE_MODULES = 'D:\dsh\profiles\node_modules'; npm test
+```
+
+升级 DSH 后请顺手做三件事：① 把 `devDependencies` 里的
+`@deepseek-ai/dsh-client-ui-primitives` 改成与宿主相同的版本；② `npm test` 至少让
+`tests/dsh-compat.spec.ts` 全绿；③ 若上游改了图标名或组件名，`npm run typecheck` 会先失败。
+
+### 0.1.7 的两处破坏性变更（历史记录，本插件已适配）
 
 1. **设置接口**：浏览器设置接口从 `settingsScope` 切换到 `configForms`，并要求 Host 插件通过
    live Config 暴露可编辑字段（字段要标 `.volatile()`，否则写入会被 Host 拒绝）。本插件已将
    设置迁至自身 `dsh-ob-agent` 配置项，浏览器与 Host 共用同一份 profile 配置。
 2. **UI 图标命名**：产品图标从 `Icon<名>Outline<尺寸>`（例如 `IconPlusOutline16`）改为
    `Icon<名>OutlineRegular / Medium`（1px / 1.3px 描边），尺寸改由 `size` 属性表达。
-   旧名字在新版里**不存在**，而客户端 bundle 把 UI 组件库当外部依赖在运行期加载 —— 缺失的
-   导入就是 `undefined`，React 一渲染就抛错，槽位条目随后被摘除。**症状是聊天框的「子代理」
-   条不出现、设置页「子代理」整片空白，控制台之外没有任何线索。** 适配集中在
-   `src/client/host-ui.tsx`：新名优先、旧名兜底，同一份产物在新旧 DSH 上都能渲染。
+   旧名字在 `0.1.7-rc.2` 与 `0.2.0-rc.2` 上**都不存在**，而客户端 bundle 把 UI 组件库当
+   外部依赖在运行期加载 —— 缺失的导入就是 `undefined`，React 一渲染就抛错，槽位条目随后被
+   摘除。**症状是聊天框的「子代理」条不出现、设置页「子代理」整片空白，控制台之外没有任何
+   线索。** 适配集中在 `src/client/host-ui.tsx`：新名优先、旧名兜底（旧名那一层只对更老的
+   宿主有意义，在受支持的 DSH 上是恒为 `undefined` 的具名导入），同一份产物两边都能渲染。
 
 改这一层时有两条硬约束，都是踩过的坑：
 
@@ -28,11 +67,22 @@ DSH 0.1.7 有两处破坏性变更，本插件都已适配：
 - **自检只告警、绝不因此放弃注册**。缺一个图标的代价是那一处空着，而「因为自检就不注册」
   会让整个界面消失 —— 重启后连设置页的「子代理」导航项都没有，就是这个失败模式。
 
-升级 DSH 时，请把开发依赖 `@deepseek-ai/dsh-client-ui-primitives` 一并升到同一版本：现代命名
-走具名导入，名字被改掉时 `npm run typecheck` 会直接失败；旧命名由 `src/client/legacy-icons.d.ts`
-补声明，同样只是具名导入，在新宿主上取到 `undefined` 而不是加载错误。
-
 从旧版本升级时，原 `ob-agent` 命名空间可能留在 `~/.dsh/settings.yaml.imported`。把该段迁入 `~/.dsh/profiles/web/cordis.patch.yml` 中 `id: dsh-ob-agent` 的 `config`，保留全部字段，尤其是 `entries` 与 `sessions`；迁移后重启 DSH 并硬刷新页面。
+
+### 工具参数为什么必须编译成 JSON Schema
+
+模型可见的工具模式是 `ToolSchema.parameters`，上游注释写得明确：**JSON Schema object for
+the arguments**（根是 `{ type: 'object', properties, required }`）。而
+`{ 字段名: { type, required, description } }` 这种写法只是 `defineTool` 的**作者侧 DSL**，
+要经上游 `parameterSchemaSpecToJsonSchema` 编译后才变成模型看到的样子。
+
+本插件刻意不依赖 `@deepseek-ai/dsh-tools`（它只发布在 DSH 自己的解析链上），`agent_create` /
+`agent_update` / `agent_list` 三个工具是**裸注册**的，所以这一步得自己做（`authoring.ts` 的
+`parameterSchemaOf`）。漏做**不会报错**，只会静默降级：Anthropic 系 provider 因为
+`input_schema` 不是 object 而拒绝整个请求，OpenAI 系 provider 则把每个字段名当成未知关键字，
+参数说明形同虚设 —— 模型只能靠描述猜参数名。`tests/dsh-compat.spec.ts` 会在真实登记表上
+断言这三个工具的 `parameters.type === 'object'`，防止再次退化。
+
 
 ---
 
@@ -157,7 +207,7 @@ Switch / Button / Tag / Menu / Tooltip / DisclosureRow 与官方图标），配�
   重新注册或设置改变后会重新尝试。无法隐藏的名字会有一条 `dsh-ob-agent:` 中文告警。
 - **可见不等于可执行**：`tools.schemas(agent)` 枚举的是完整可见面，包含继承工具与自有工具，
   不是「可被 restrict 的名字」清单。提供方直接在 agent 自有层注册的委派工具可能仍会显示，
-  但执行层照旧拒绝。当前 DSH 的原生 `subagent` 就存在这一场景（见 4.6）；不能仅凭一个
+  但执行层照旧拒绝。当前 DSH 的原生 `subagent` 就存在这一场景（见 4.7）；不能仅凭一个
   工具残留就判定整个隐藏层失效。
 - **子代理**（`session.header.origin === 'subagent'`）只装前两层，不装配任何委派或编排
   工具 → 任何层级的子代理都不能再委派。唯一例外是「回发给直接父代理」的 `send_message`
@@ -213,7 +263,25 @@ Switch / Button / Tag / Menu / Tooltip / DisclosureRow 与官方图标），配�
 关闭该开关后子代理回到「只能把结论写在最终回复里」的行为。`gate.enabled = false`
 （逃生舱）时本插件完全不干预，`send_message` 按 DSH 原生行为可用。
 
-### 4.6 原生 `subagent` 残留：已定性的上游自有层边界
+### 4.6 能力清单只列**真的装上了**的条目
+
+系统提示段里的「本会话已启用以下 Agent 能力」与 `list_agents` 结果开头的能力清单，回答的是
+「你现在能用哪些子代理工具」。因此它们必须反映**装配结果**，而不是条目里的**声明值**：
+
+- 条目里的 `toolNames` 是声明（尤其 `subagent_native` 的 `subagent_hy4` —— 它来自某个具体
+  预设，换一个预设就根本不存在）；
+- 协调器每轮都会算出「哪些条目真的装上了」（档 A 放行 / 档 B 重挂成功 / 档 C 落空、
+  实现包加载失败、装配抛错），这份结论现在会被清单读取，落空的条目直接不出现。
+
+**判定的两个方向都要保守**：只要条目有任意一个安装键可用就算可用（双模式子代理只有一个
+模式装上时，仍要如实宣传它能用）；拿不到判定信息时（`ALWAYS_AVAILABLE`）一律按可用处理 ——
+「模型以为有、调用才发现没有」只浪费一轮，而「实际有、清单里不写」会让它根本不去用。
+
+> 这一条是实测发现并修掉的：在没提供 `subagent_hy4` 的预设下勾选「DSH 原生具名子代理」，
+> `list_agents` 会列出它、调用却得到 `unknown tool`。协调器当时**已经**判出档 C 并写了
+> 中文告警，只是渲染层没读这个结论。
+
+### 4.7 原生 `subagent` 残留：已定性的上游自有层边界
 
 DSH `0.1.7-rc.2` 的 Web 预设为原生 `subagent` 开启了 `modelSelectionSettings: true`。
 `@deepseek-ai/dsh-tool-subagent` 在这种配置下会监听 `agent/created`，通过每个 agent 的
@@ -319,7 +387,7 @@ dsh-ob-agent: agent own-layer-probe 有 1 个名字无法进入隐藏层（它�
    若你的设置段来自旧版本，启动日志里应有一行「出厂默认已迁移到第 4 版」。
 2. 新会话默认**关闭**总开关；关闭时继承面里的 `subagent*` / `send_message` /
    `interrupt_agent` / `list_agents` / `workflow` / `ralph` / `agent_*` 应被隐藏；提供方自有层
-   的同类工具可能仍可见（见 4.6），但所有命中闸门且未放行的名字均不能执行，调用应被拒绝。
+   的同类工具可能仍可见（见 4.7），但所有命中闸门且未放行的名字均不能执行，调用应被拒绝。
 3. 打开总开关 → 复选框按「默认启用」勾选；用请求提示检查器确认系统提示里出现
    「本会话已启用以下 Agent 能力」一段，且内容与勾选一致。
 4. 勾选「代码审查」→ 出现 `subagent_code_review`；让模型修改代码或文档，
@@ -343,8 +411,13 @@ dsh-ob-agent: agent own-layer-probe 有 1 个名字无法进入隐藏层（它�
     再让子代理回发 → 应当收到中文拒绝。
 15. 子代理工具清单与执行权限**分开验收**：可继续对话的子代理应有 `send_message`；
     继承面提供的 `list_agents` / `interrupt_agent` / 委派与编排工具应被隐藏。当前 Web
-    预设可能仍显示自有层原生 `subagent`（见 4.6），必须确认它不能执行，不要误报整层失效。
+    预设可能仍显示自有层原生 `subagent`（见 4.7），必须确认它不能执行，不要误报整层失效。
     若多个继承工具也残留，才按 2.1 核对 profile 副本并检查 4.1 的查看者作用域与隐藏告警。
+16. 能力清单**只列真的装上了的条目**（见 4.6）：勾选「DSH 原生具名子代理」后，`list_agents`
+    与系统提示段里出现的名字，逐个调用都应当有正常响应；当前预设没提供的名字**不应出现**
+    （同时 DSH 日志里应有一条 `dsh-ob-agent: 条目 subagent_native 本会话不可用：当前会话预设
+    没有装配这些具名子代理工具：…`）。若清单里出现了调用即 `unknown tool` 的名字，说明
+    profile 副本还是旧构建，按 2.1 同步后重启。
 
 ## 8. 排障
 
@@ -356,10 +429,10 @@ dsh-ob-agent: agent own-layer-probe 有 1 个名字无法进入隐藏层（它�
 | 聊天框看不到面板、设置页显示「设置命名空间不可用」 | 插件配置表单不可用：确认 `@deepseek-ai/dsh-client-ui-settings` 已装配、插件在 `dsh.profile.bundles` 里且 DSH 已重启。 |
 | 勾选后工具仍不出现 | 看 DSH 日志里的 `dsh-ob-agent:` 中文告警（实现包加载失败 / 缺 workflowEngine / 只读交集为空 / provider 未注册）。 |
 | 模型说工具被拒绝 | 主会话检查总开关或条目是否勾选；子代理除回发外禁止 Agent 能力，守卫的中文拒绝信息会说明。 |
-| 子代理只残留原生 `subagent`，其它委派/编排已隐藏 | 检查提供方是否开启 `modelSelectionSettings` 并在 agent 自有层注册它；这是已定性的继承限制边界，不是执行层漏拦。按 4.6 核实工具请求清单、拒绝结果与告警；不要靠反复重装隐藏层处理。 |
+| 子代理只残留原生 `subagent`，其它委派/编排已隐藏 | 检查提供方是否开启 `modelSelectionSettings` 并在 agent 自有层注册它；这是已定性的继承限制边界，不是执行层漏拦。按 4.7 核实工具请求清单、拒绝结果与告警；不要靠反复重装隐藏层处理。 |
 | DSH 持续占满一个 CPU 核心 | 检查终端里的 `dsh-ob-agent:` 隐藏层告警，并确认 profile 安装副本含有本次重算收敛修复；若需立即恢复服务，在 profile 补丁的 `id: dsh-ob-agent` 下设置 `disabled: true`，重启 DSH。 |
 | 子代理里 `send_message` 被拒 | 三种可能：① 它是**一次性**子代理（只有可继续对话的子代理能回发给父代理）；② 设置页关了「子代理可回发消息给父代理」；③ 目标填的不是它的直接父代理。日志里若有 `未能装配 send_message` 则是原生实现包没加载出来。 |
-| `workflow` 显示不可用 | 该会话预设没有装配 `@deepseek-ai/dsh-workflow-worker-thread`（缺 `workflowEngine` 服务）。 |
+| `workflow` 显示不可用 | 该会话预设没有装配 `@deepseek-ai/dsh-workflow`（缺 `workflowEngine` 服务）。 |
 | 想临时回到原生行为 | 设置页 → 闸门 → 关闭「启用闸门」。 |
 
 ## 9. 已知限制
@@ -380,7 +453,7 @@ dsh-ob-agent: agent own-layer-probe 有 1 个名字无法进入隐藏层（它�
   「可见但不可 restrict」的保留名，默认白名单（`read`/`read_image`/`glob`/`grep`）不受影响。
 - **子代理自有层**里命中闸门且未放行的工具，`tools.restrict` 无法隐藏：该名字
   仍留在模型清单，但调用时由执行层守卫拒绝；其它能隐藏的继承面名字不受影响。
-  当前原生 `subagent` 的提供方注册路径与实测见 4.6。只在继承面不存在同名工具时会触发
+  当前原生 `subagent` 的提供方注册路径与实测见 4.7。只在继承面不存在同名工具时会触发
   `unknown global tool` 告警；若存在同名继承工具，限制可能成功而自有版本仍可见，因此
   「无告警」不保证无残留。需要完全消失时应取消提供方的自有层注册。
 - 预设切到中途新出现的同名原生工具，若本插件已重挂过它，仍以本插件的实例为准

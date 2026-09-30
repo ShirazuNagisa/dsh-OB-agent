@@ -33,14 +33,16 @@ import type {
   ToolDefinitionLike,
   ToolRuntimeLike,
 } from './context-types.ts'
-import { CHILD_REPLY_TOOL, SECTION_NAME, type ChildContinuationMode, type ObAgentSection } from './contract.ts'
+import { CHILD_REPLY_TOOL, SECTION_NAME, type ChildContinuationMode, type ObAgentEntry, type ObAgentSection } from './contract.ts'
 import {
+  ALWAYS_AVAILABLE,
   childReplyAllowed,
   createGateMatcher,
   renderSectionText,
   renderSubagentRoster,
   resolveActive,
   type ActiveEntry,
+  type EntryAvailability,
 } from './plan.ts'
 import {
   CHILD_REPLY_KEY,
@@ -162,6 +164,11 @@ interface AgentState {
   childMode: ChildContinuationMode
   /** 本次是否放行了子代理回发给直接父代理（系统提示段实时读取）。 */
   childReply: boolean
+  /**
+   * 本次**真的**装配成功的条目判定：能力清单（系统提示段与 `list_agents`）实时读取它，
+   * 把「声明了但本会话并不存在」的条目挡在清单外。缺省恒为 true（见 {@link ALWAYS_AVAILABLE}）。
+   */
+  isAvailable: EntryAvailability
 }
 
 const states = new WeakMap<AgentLike, AgentState>()
@@ -183,6 +190,7 @@ function stateOf(agent: AgentLike): AgentState {
       pending: false,
       childMode: 'unknown',
       childReply: false,
+      isAvailable: ALWAYS_AVAILABLE,
     }
     states.set(agent, state)
   }
@@ -298,6 +306,39 @@ export function fingerprintOf(plan: InstallPlan): string {
   return plan.kind === 'subagent'
     ? `sub|${plan.toolName}|${JSON.stringify(plan.config)}`
     : `nat|${plan.impl}|${plan.action}|${plan.toolNames.join(',')}`
+}
+
+/**
+ * 一条**已启用**条目本次会派生出的全部安装键（与 {@link keyOf} 同形）。
+ *
+ * 子代理条目按模式派生（`sub:<id>:<mode>`），原生条目一个键（`nat:<id>`）。用于把
+ * 「本条目的键是否出现在本次可用集合里」翻译成「该条目是否真的装上了」。
+ * @param entry - 已启用的条目。
+ * @returns 该条目可能的安装键（可能为空：子代理条目没有启用任何模式）。
+ */
+export function keysOfEntry(entry: ObAgentEntry): string[] {
+  if (entry.kind === 'native') return [`nat:${entry.id}`]
+  return entry.modes.map(mode => `sub:${entry.id}:${mode}`)
+}
+
+/**
+ * 由「本次可用计划键集合」构造条目可用性判定。
+ *
+ * 为什么要它：条目里的 `toolNames` 是**声明值**（会话预设可能根本没提供那个具名工具），
+ * 而能力清单是要给模型看的——列一个调用必然失败的名字只会白耗一轮。协调器已经把
+ * 「哪些键真的装上了」算出来了，这里只做翻译。判定必须**保守**：只要该条目有任意一个键
+ * 可用就算可用（双模式条目只有一个模式装上时，仍要如实宣传它能用）。
+ * @param usableKeys - 本次可用计划的键集合（计划为空时不传，行为等同全部可用）。
+ * @returns 条目可用性判定。
+ */
+export function availabilityOf(usableKeys: ReadonlySet<string>): EntryAvailability {
+  return (entry) => {
+    const keys = keysOfEntry(entry)
+    // 派不出任何键的条目（子代理条目一个模式都没启用）：它本来就提供不了工具，
+    // 保持可见不会误导模型，交由既有的形状校验去报错。
+    if (keys.length === 0) return true
+    return keys.some(key => usableKeys.has(key))
+  }
 }
 
 /**
@@ -576,7 +617,9 @@ function installPlan(
       }
       const roster = (): string => {
         try {
-          return renderSubagentRoster(deps.read(), sessionId)
+          // 可用性由协调器在每次重算结束时更新，因此这里**实时**读取，不缓存：
+          // 本函数在装配期返回，而清单是在工具结果渲染时才生成的。
+          return renderSubagentRoster(deps.read(), sessionId, stateOf(agent).isAvailable)
         } catch (error) {
           // 渲染发生在工具结果的展示路径上：这里抛错会毁掉整条结果，退化为「不追加」。
           deps.ctx.logger.warn(
@@ -605,7 +648,7 @@ function installPlan(
     if (plan.impl === 'workflow' && serviceOf<unknown>(runtimeCtx, 'workflowEngine') === undefined) {
       deps.ctx.logger.warn(
         'dsh-ob-agent: 缺少 workflowEngine 服务，workflow 条目本会话不可用'
-        + '（需要装配 @deepseek-ai/dsh-workflow-worker-thread）',
+        + '（需要装配 @deepseek-ai/dsh-workflow）',
       )
       return
     }
@@ -700,6 +743,8 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
               child
                 ? { parentSession: agent.session.header.parentSession, reply: state.childReply }
                 : undefined,
+              // 能力清单只列真的装上了的条目（`state.isAvailable` 实时读取本次可用集合）。
+              state.isAvailable,
             )
           } catch (error) {
             deps.ctx.logger.warn(
@@ -759,6 +804,11 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
     }
   }
 
+  // 能力清单的可用性判定：此刻 `usable` 就是「本会话真的装得上的条目」。
+  // 之后装配失败的键会被就地移出，所以清单读到的是最终结果，而不是计划意图。
+  const usableKeys = new Set(usable.keys())
+  state.isAvailable = availabilityOf(usableKeys)
+
   // 差异应用：先卸载「不再需要或配置已变」的项，再安装新增项（指纹相同则完全不动）。
   for (const [key, install] of [...state.installs]) {
     const target = usable.get(key)
@@ -781,6 +831,9 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
     if (state.installs.has(key)) continue
     const installed = installPlan(deps, agent, plan, authoring)
     if ('reason' in installed) {
+      // 装配失败 = 该条目本会话其实不可用：把它从能力清单里摘掉，别让模型去调用一个
+      // 根本注册不上的工具名。
+      usableKeys.delete(key)
       deps.ctx.logger.warn(`dsh-ob-agent: 条目 ${key} 本会话不可用：${installed.reason}`)
       continue
     }

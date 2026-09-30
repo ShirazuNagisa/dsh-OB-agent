@@ -50,6 +50,8 @@ interface Harness {
   readonly warnings: string[]
   /** 当前模型能看到的工具名（包含自有层，排除已隐藏的继承面）。 */
   visibleTools(): string[]
+  /** 渲染本插件注册的系统提示段（能力清单）；未注册时为空串。 */
+  promptText(): string
   /** 切换设置段（模拟设置热更新后的重算）。 */
   use(section: ObAgentSection): void
   /** 模拟上游工具重新注册后，原先不可隐藏的名字变成继承面名字。 */
@@ -142,8 +144,13 @@ function harness(input: {
       ])].map(name => ({ name }))
     },
   }
+  /** 本插件注册的提示段（能力清单就是从这里渲染的）。 */
+  let promptSection: { readonly text?: unknown } | undefined
   const systemPrompt: SystemPromptLike = {
-    section: () => () => undefined,
+    section: (section) => {
+      promptSection = section as { readonly text?: unknown }
+      return () => undefined
+    },
     getSectionOrder: () => 0,
   }
   // 「直接 get 到的实例」与「注入面拿到的实例」在本替身里刻意不同：只有注入面的那个能
@@ -223,6 +230,10 @@ function harness(input: {
     viewScopes,
     warnings,
     visibleTools: () => tools.schemas?.(agent).map(schema => schema.name) ?? [],
+    promptText: () => {
+      const text = promptSection?.text
+      return typeof text === 'function' ? (text as () => string)() : typeof text === 'string' ? text : ''
+    },
     use: (next) => {
       section = next
     },
@@ -432,5 +443,37 @@ describe('reconcileAgent：隐藏层的取法与降级', () => {
     h.unblock('subagent_fork')
     await reconcileAgent(h.deps, h.agent)
     expect(h.restrictCalls.at(-1)).toEqual(['subagent_fork', 'subagent_general_session', 'workflow'])
+  })
+})
+
+describe('reconcileAgent：能力清单只列真的装上了的条目', () => {
+  it('原生条目判定为不可用（档 C）时，能力清单与系统提示段都不再出现它的工具名', async () => {
+    // 现场复现：`subagent_native` 声明了 `subagent_hy4`，而当前会话预设根本没提供它 ——
+    // 模型照着清单调用会拿到 `unknown tool`。协调器已判出档 C 并写告警，渲染层必须读它。
+    const section = readSection({
+      ...DEFAULT_SECTION,
+      sessions: { 'agent-1': { enabled: true, selected: ['agents_list', 'subagent_native'] } },
+    })
+    // `list_agents` 在继承面里 → `agents_list` 的 `list-agents` 档位判定不受影响；
+    // `subagent_hy4` 不在继承面 → `subagent_native` 落档 C。
+    const h = harness({ inherited: ['read', 'list_agents'], section })
+    await reconcileAgent(h.deps, h.agent)
+
+    const text = h.promptText()
+    expect(text).toContain('`list_agents`')
+    expect(text).not.toContain('subagent_hy4')
+    // 证明上面是「可用性判定生效」，不是「条目本来就没被勾选」。
+    expect(h.warnings.some(message => message.includes('subagent_native'))).toBe(true)
+  })
+
+  it('档 A 放行的具名工具确实存在时照旧列出（判定不能误伤真实可用的能力）', async () => {
+    const section = readSection({
+      ...DEFAULT_SECTION,
+      sessions: { 'agent-1': { enabled: true, selected: ['subagent_native'] } },
+    })
+    const h = harness({ inherited: ['read', 'subagent_hy4'], section })
+    await reconcileAgent(h.deps, h.agent)
+    expect(h.promptText()).toContain('`subagent_hy4`')
+    expect(h.warnings).toEqual([])
   })
 })

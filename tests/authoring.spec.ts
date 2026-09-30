@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SECTION } from '../src/defaults.ts'
-import { authoringTools, entryFromArgs, type AuthoringDeps } from '../src/authoring.ts'
+import { authoringTools, entryFromArgs, parameterSchemaOf, type AuthoringDeps } from '../src/authoring.ts'
 import { readSection } from '../src/normalize.ts'
 import type { ToolDefinitionLike, ToolExecLike } from '../src/context-types.ts'
 import type { ObAgentEntry, ObAgentSection } from '../src/contract.ts'
@@ -229,5 +229,40 @@ describe('工具定义自身', () => {
     }
     expect(toolOf(h.tools, 'agent_list').isConcurrencySafe?.({})).toBe(true)
     expect(toolOf(h.tools, 'agent_create').isConcurrencySafe?.({})).toBe(false)
+  })
+
+  it('参数模式是模型可见的 JSON Schema（根为 object），不是作者侧属性表', () => {
+    // 上游 `ToolSchema.parameters` 的契约是 JSON Schema；直接把属性表注册上去不会报错，
+    // 只会静默降级：Anthropic 系 provider 因 input_schema 非 object 拒绝，OpenAI 系则把
+    // 字段名当未知关键字。这条断言就是防止再次退化。
+    const h = harness()
+    const create = toolOf(h.tools, 'agent_create').parameters
+    expect(create.type).toBe('object')
+    const props = create.properties as Record<string, Record<string, unknown>>
+    expect(Object.keys(props).sort()).toEqual([
+      'defaultEnabled', 'description', 'enableNow', 'id', 'identityPrompt', 'model', 'modelProvider',
+      'modes', 'name', 'permission', 'provider', 'readOnlyAllow', 'whenPrompt',
+    ])
+    expect(create.required).toEqual(['id', 'name', 'whenPrompt', 'identityPrompt'])
+    // 属性表里的 `required: true` 必须被搬进根 required 数组，不能留在属性定义里
+    for (const property of Object.values(props)) expect(property.required).toBeUndefined()
+    expect(props.id?.type).toBe('string')
+    expect(props.modes?.type).toBe('array')
+
+    const list = toolOf(h.tools, 'agent_list').parameters
+    expect(list).toEqual({ type: 'object', properties: {} })
+  })
+
+  it('parameterSchemaOf 保留非对象字段定义并忽略非 true 的 required', () => {
+    const schema = parameterSchemaOf({
+      a: { type: 'string', required: true },
+      b: { type: 'number', required: false },
+      c: { type: 'boolean' },
+    })
+    expect(schema).toEqual({
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' }, c: { type: 'boolean' } },
+      required: ['a'],
+    })
   })
 })

@@ -9,11 +9,13 @@ import { DEFAULT_SECTION, LIST_AGENTS_EMPTY, LIST_AGENTS_NOTE, NATIVE_LIST_EMPTY
 import { readSection } from '../src/normalize.ts'
 import {
   augmentListAgents,
+  availabilityOf,
   captureRegistrations,
   continuationModeOf,
   denyNamesFor,
   fingerprintOf,
   keyOf,
+  keysOfEntry,
   registerSelectedTools,
   restrictableNames,
   type ModuleName,
@@ -461,5 +463,40 @@ describe('planChildReply（子代理回发父代理的装配计划）', () => {
     expect(planChildReply(undefined)).toBeUndefined()
     expect(planChildReply({ ...control, impl: 'workflow' })).toBeUndefined()
     expect(planChildReply({ ...control, toolNames: ['interrupt_agent'] })).toBeUndefined()
+  })
+})
+
+describe('条目可用性判定（能力清单只列真的装上了的条目）', () => {
+  /** 取出厂默认里的某条原生条目。 */
+  const native = (id: string): ObAgentEntry =>
+    DEFAULT_SECTION.entries.find(item => item.id === id) as ObAgentEntry
+
+  it('安装键与 keyOf 同形：原生一个键，子代理按模式派生', () => {
+    expect(keysOfEntry(native('workflow'))).toEqual(['nat:workflow'])
+    const dual: ObAgentEntry = { ...entry, id: 'demo', modes: ['one-shot', 'continuable'] }
+    expect(keysOfEntry(dual)).toEqual(['sub:demo:one-shot', 'sub:demo:continuable'])
+  })
+
+  it('只有全部键都不可用才判为不可用（双模式装上一个就算可用）', () => {
+    const dual: ObAgentEntry = { ...entry, id: 'demo', modes: ['one-shot', 'continuable'] }
+    expect(availabilityOf(new Set(['sub:demo:continuable']))(dual)).toBe(true)
+    expect(availabilityOf(new Set(['sub:demo:one-shot']))(dual)).toBe(true)
+    expect(availabilityOf(new Set(['nat:workflow']))(dual)).toBe(false)
+    expect(availabilityOf(new Set())(dual)).toBe(false)
+  })
+
+  it('原生条目按自己的键判定，互不牵连', () => {
+    const available = availabilityOf(new Set(['nat:workflow']))
+    expect(available(native('workflow'))).toBe(true)
+    expect(available(native('ralph'))).toBe(false)
+    // 现场缺陷的回归闸：`subagent_native` 声明 `subagent_hy4`，而当前预设没有提供它
+    // （实测调用得到 `unknown tool`）→ 计划落空 → 必须判为不可用，不能出现在能力清单里。
+    expect(available(native('subagent_native'))).toBe(false)
+  })
+
+  it('派不出任何键的条目保持可见（不隐藏，交由既有校验报错）', () => {
+    const bare: ObAgentEntry = { ...entry, id: 'demo', kind: 'subagent', modes: [] }
+    expect(keysOfEntry(bare)).toEqual([])
+    expect(availabilityOf(new Set())(bare)).toBe(true)
   })
 })

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_SECTION, SECTION_HEADER } from '../src/defaults.ts'
 import { readSection } from '../src/normalize.ts'
 import {
+  ALWAYS_AVAILABLE,
   childReplyAllowed,
   createGateMatcher,
   effectiveSelection,
@@ -13,7 +14,7 @@ import {
   resolveActive,
   sanitizeVariables,
 } from '../src/plan.ts'
-import type { ObAgentSection } from '../src/contract.ts'
+import type { ObAgentEntry, ObAgentSection } from '../src/contract.ts'
 
 /** 在出厂默认上做局部覆盖，得到一份完整设置段。 */
 function sectionOf(raw: Record<string, unknown> = {}): ObAgentSection {
@@ -329,5 +330,50 @@ describe('renderSectionText：子代理作用域', () => {
     const text = renderSectionText(section, 's1', 'docs/model-guide.md')
     expect(text).toContain(SECTION_HEADER)
     expect(text).toContain('`subagent_general_session`')
+  })
+})
+
+describe('能力清单只列真的装上了的条目（可用性判定）', () => {
+  /** 某会话勾选了这些条目。 */
+  const selected = (ids: readonly string[]): ObAgentSection =>
+    sectionOf({ sessions: { s1: { enabled: true, selected: [...ids] } } })
+
+  it('声明了但本会话并不存在的原生工具，不能出现在提示段与清单里', () => {
+    // 现场复现：`subagent_native` 声明 `subagent_hy4`，而当前预设根本没提供它 ——
+    // 调用得到 `unknown tool`。协调器已判出档 C（并写日志），渲染层必须读这个结论，
+    // 否则模型会照着清单去调用一个必然失败的名字。
+    const section = selected(['general', 'subagent_native'])
+    const available = (entry: ObAgentEntry): boolean => entry.id !== 'subagent_native'
+
+    // 拿不到判定时（缺省）保持原行为 —— 只用于证明下面被摘掉的是判定起作用，不是本来就缺。
+    expect(renderSubagentRoster(section, 's1')).toContain('`subagent_hy4`')
+    expect(renderSectionText(section, 's1', 'd')).toContain('`subagent_hy4`')
+
+    const roster = renderSubagentRoster(section, 's1', available)
+    expect(roster).not.toContain('subagent_hy4')
+    // 原生那一行只列真正可用的名字：`agents_control` 因「可继续对话」被自动放行，仍应出现。
+    const nativeLine = roster.split('\n').find(line => line.includes('已放行的原生 Agent 工具')) ?? ''
+    expect(nativeLine).toContain('`send_message`')
+    expect(nativeLine).not.toContain('subagent_hy4')
+    // 同会话真正可用的子代理条目不受牵连。
+    expect(roster).toContain('`subagent_general_session`')
+
+    const sectionText = renderSectionText(section, 's1', 'docs/model-guide.md', undefined, available)
+    expect(sectionText).not.toContain('subagent_hy4')
+    expect(sectionText).toContain('`subagent_general_session`')
+  })
+
+  it('缺省判定恒为可用（拿不到信息时宁可多报，也不藏起真实能力）', () => {
+    const section = selected(['subagent_native'])
+    expect(ALWAYS_AVAILABLE(DEFAULT_SECTION.entries[0] as ObAgentEntry)).toBe(true)
+    expect(renderSubagentRoster(section, 's1')).toContain('subagent_hy4')
+    expect(renderSubagentRoster(section, 's1', ALWAYS_AVAILABLE)).toContain('subagent_hy4')
+  })
+
+  it('只摘掉不可用的那一条，同会话其它原生条目照旧列出', () => {
+    const section = selected(['workflow', 'ralph'])
+    const text = renderSubagentRoster(section, 's1', entry => entry.id !== 'workflow')
+    expect(text).toContain('`ralph`')
+    expect(text).not.toContain('`workflow`')
   })
 })

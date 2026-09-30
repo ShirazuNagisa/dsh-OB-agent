@@ -17,7 +17,7 @@ function definitionOf(toolName: string): ToolDefinitionLike {
   return {
     name: toolName,
     description: `${toolName}（测试替身）`,
-    parameters: { agent_id: { type: 'string', required: true } },
+    parameters: { type: 'object', properties: { agent_id: { type: 'string' } }, required: ['agent_id'] },
     output: {
       schema: { type: 'object' },
       render: () => [{ type: 'text', text: `${toolName} ok` }],

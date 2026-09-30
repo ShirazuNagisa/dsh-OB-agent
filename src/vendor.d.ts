@@ -57,12 +57,6 @@ declare module '@deepseek-ai/dsh-tool-ralph' {
   export function apply(ctx: unknown, config?: { subagentProvider?: string; maxRounds?: number }): void
 }
 
-/** 工作流引擎（worker thread 实现，`workflow` 工具依赖 `workflowEngine` 服务）。 */
-declare module '@deepseek-ai/dsh-workflow-worker-thread' {
-  const WorkerThreadWorkflowEngine: unknown
-  export default WorkerThreadWorkflowEngine
-}
-
 /** 设置服务的模式描述（DSH 内部使用同一份实现）。 */
 declare module '@deepseek-ai/schemastery' {
   export interface SchemasterySchema {

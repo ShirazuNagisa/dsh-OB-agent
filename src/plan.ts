@@ -37,6 +37,17 @@ export interface ActiveEntry {
   readonly modes: readonly EntryMode[]
 }
 
+/**
+ * 该条目本次是否**真的**装配成功（协调器给出的可用性判定）。
+ *
+ * 缺省实现恒为 true：拿不到判定时宁可多报一条，也不能把真实可用的能力藏起来 ——
+ * 「模型以为有、调用才发现没有」只是浪费一轮，「实际有、清单里不写」会让它根本不去用。
+ */
+export type EntryAvailability = (entry: ObAgentEntry) => boolean
+
+/** 占位实现：无判定信息时按全部可用处理。 */
+export const ALWAYS_AVAILABLE: EntryAvailability = () => true
+
 /** 一条条目在两种模式下可能派生的全部工具名（含未启用模式）。 */
 export function allToolNamesOf(entry: ObAgentEntry): string[] {
   if (entry.kind === 'native') return [...(entry.toolNames ?? [])]
@@ -173,10 +184,17 @@ export function describeActiveEntry(item: ActiveEntry): string {
  * 子代理条目。这份清单回答的是「有哪些子代理可用」，与实例清单互补。
  * @param section - 当前设置段。
  * @param sessionId - 会话 id（读取该会话的勾选）。
+ * @param isAvailable - 本次真的装配成功的判定；被判定为不可用的条目不会出现在清单里。
+ *   可选：缺省按全部可用处理（见 {@link ALWAYS_AVAILABLE}）。
  * @returns 可直接拼进工具结果的多行文本。
  */
-export function renderSubagentRoster(section: ObAgentSection, sessionId: string): string {
-  const active = section.gate.enabled ? resolveActive(section, sessionId) : []
+export function renderSubagentRoster(
+  section: ObAgentSection,
+  sessionId: string,
+  isAvailable: EntryAvailability = ALWAYS_AVAILABLE,
+): string {
+  const active = (section.gate.enabled ? resolveActive(section, sessionId) : [])
+    .filter(item => isAvailable(item.entry))
   const subagents = active.filter(item => item.entry.kind === 'subagent')
   const natives = active.filter(item => item.entry.kind === 'native')
   // 计数按**工具**而非条目：一条双模式条目会派生两个工具名，按条目数会让数字与下面列出的名字对不上。
@@ -245,6 +263,7 @@ export function renderSectionText(
   sessionId: string,
   docHint: string,
   child?: ChildPromptInput,
+  isAvailable: EntryAvailability = ALWAYS_AVAILABLE,
 ): string {
   // 子代理作用域不展示主会话的能力清单：委派、续话与编排在子代理里一律不放行，
   // 照抄一份主会话清单只会让子代理以为自己能委派。这里只说明它真正拥有的回发通道。
@@ -257,7 +276,9 @@ export function renderSectionText(
     return sanitizeVariables(SECTION_CHILD_REPLY.replace('{parent}', () => parent), section.promptVariables)
   }
   if (!section.gate.enabled) return ''
-  const active = resolveActive(section, sessionId)
+  // 不可用的条目不出现在能力清单里：模型看到用不了的工具名只会白耗一轮
+  // （典型是 `subagent_native` 声明的具名工具在当前预设里根本不存在）。
+  const active = resolveActive(section, sessionId).filter(item => isAvailable(item.entry))
   const lines: string[] = [SECTION_HEADER]
   if (active.length === 0) {
     lines.push(SECTION_EMPTY)
