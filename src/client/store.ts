@@ -25,6 +25,12 @@ export interface ObAgentSnapshot {
   readonly section: ObAgentSection
   /** 本会话的有效选择（无记录时回落到出厂默认）。 */
   readonly session: ObAgentSessionState
+  /**
+   * 「智能体团队模式」是否开启（取自设置段的同名字段）：
+   * 开启后本插件不接管代理，界面转为只读说明 + 一个可退出该模式的开关，
+   * 与官方团队的实际避让由主机侧（backend）完成。
+   */
+  readonly teamMode: boolean
 }
 
 /** 浏览器侧设置桥。 */
@@ -35,6 +41,84 @@ export interface ObAgentStore extends ObservableLike<ObAgentSnapshot> {
   patch(fields: Record<string, unknown>): Promise<string | undefined>
   /** 释放订阅。 */
   dispose(): void
+}
+
+// ── 界面决策（纯函数，界面只调用不重写，便于离线回归） ────────────────────────
+
+/** dock 条目区是否只读。 */
+export interface DockLockState {
+  readonly writable: boolean
+  readonly pending: boolean
+  readonly teamMode: boolean
+}
+
+/** dock 首行摘要的输入。 */
+export interface DockSummaryState extends DockLockState {
+  readonly enabled: boolean
+  readonly count: number
+}
+
+/** 设置页两个锁的输入。 */
+export interface SettingsLockState {
+  readonly writable: boolean
+  readonly saving: boolean
+  readonly teamMode: boolean
+}
+
+/** dock 首行摘要对应的文案键（优先级的唯一定义处）。 */
+export type DockSummaryKey =
+  | 'dock.pending' | 'dock.teamLocked' | 'dock.readonly' | 'dock.blocked' | 'dock.none' | 'dock.count'
+
+/**
+ * dock 条目区是否只读。
+ *
+ * 团队模式也算锁：此时本插件不接管代理，勾选条目没有意义。注意**首行展开按钮不受它影响**
+ * （见 `isDockExpandable`），否则团队模式打开后就无法从 dock 退出了。
+ * @param state - 写入中 / 设置只读 / 团队模式。
+ * @returns 只读时为 true。
+ */
+export function dockLocked(state: DockLockState): boolean {
+  return state.pending || !state.writable || state.teamMode
+}
+
+/**
+ * dock 首行是否可展开（也决定首行按钮是否可点、要不要显示箭头）。
+ *
+ * 团队模式下即使会话总开关是关的也必须可展开：展开里的那行开关是退出团队模式唯一的入口。
+ * @param state - 会话总开关与团队模式。
+ * @returns 可展开时为 true。
+ */
+export function isDockExpandable(state: { enabled: boolean; teamMode: boolean }): boolean {
+  return state.enabled || state.teamMode
+}
+
+/**
+ * dock 首行摘要的文案键（写入中 → 团队模式 → 只读 → 未开启 → 未勾选 → 计数）。
+ *
+ * 顺序即优先级：团队模式排在最前（它一开启，条目勾选与总开关都失去意义，摘要必须说明让位），
+ * 「未开启」在「未勾选」之前——总开关关着时说「未勾选任何条目」会掩盖真正的原因。
+ * @param state - 摘要所需状态。
+ * @returns 文案键。
+ */
+export function dockSummaryKey(state: DockSummaryState): DockSummaryKey {
+  if (state.pending) return 'dock.pending'
+  if (state.teamMode) return 'dock.teamLocked'
+  if (!state.writable) return 'dock.readonly'
+  if (!state.enabled) return 'dock.blocked'
+  if (state.count === 0) return 'dock.none'
+  return 'dock.count'
+}
+
+/**
+ * 设置页的两把锁。
+ *
+ * 团队模式只锁「其它字段」：那一行开关本身必须保持可操作（否则打开后就再也关不掉）。
+ * @param state - 保存中 / 设置只读 / 团队模式。
+ * @returns 其它字段是否只读，以及团队模式开关是否可操作。
+ */
+export function settingsLocked(state: SettingsLockState): { others: boolean; teamModeSwitch: boolean } {
+  const basic = state.saving || !state.writable
+  return { others: basic || state.teamMode, teamModeSwitch: basic }
 }
 
 /** 把写入失败翻译成中文原因（冲突单独提示重试）。 */
@@ -61,6 +145,7 @@ export function createObAgentStore(scope: ClientSettingsScope<ObAgentWire>, sess
       writable: raw.writable,
       section,
       session: effectiveSelection(section, sessionId),
+      teamMode: section.teamMode,
     }
   }
 

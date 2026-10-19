@@ -81,7 +81,7 @@ export function effectiveSelection(section: ObAgentSection, sessionId: string): 
  *   （否则可继续对话的子代理无法续话）。
  */
 export function resolveActive(section: ObAgentSection, sessionId: string): ActiveEntry[] {
-  if (!section.gate.enabled) return []
+  if (!section.gate.enabled || section.teamMode) return []
   const selection = effectiveSelection(section, sessionId)
   if (!selection.enabled) return []
   const byId = new Map(section.entries.filter(entry => entry.managed).map(entry => [entry.id, entry]))
@@ -172,7 +172,10 @@ export function describeActiveEntry(item: ActiveEntry): string {
   }
   const permission = item.entry.permission === 'readonly' ? '只读' : '完全权限'
   const context = item.entry.provider === 'fork' ? '继承本会话已完成轮次' : '全新上下文'
-  return `- ${item.entry.name}（${names}，${modeLabel(item.modes)}，${permission}，${context}）：${item.entry.whenPrompt}`
+  const model = item.entry.model === undefined
+    ? '模型：继承 DSH 主会话'
+    : `模型：${item.entry.model.provider}/${item.entry.model.model}，思考档位：${item.entry.model.reasoningEffort ?? 'DSH 默认'}`
+  return `- ${item.entry.name}（${names}，${modeLabel(item.modes)}，${permission}，${context}，${model}）：${item.entry.whenPrompt}`
 }
 
 /**
@@ -264,6 +267,7 @@ export function renderSectionText(
   child?: ChildPromptInput,
   isAvailable: EntryAvailability = ALWAYS_AVAILABLE,
 ): string {
+  if (section.teamMode) return ''
   // 子代理作用域不展示主会话的能力清单：委派、续话与编排在子代理里一律不放行，
   // 照抄一份主会话清单只会让子代理以为自己能委派。这里只说明它真正拥有的回发通道。
   if (child !== undefined) {
@@ -274,13 +278,16 @@ export function renderSectionText(
     // 用函数式替换：会话 id 若含 `$&` 之类的序列，字符串替换会把它当成展开模式。
     return sanitizeVariables(SECTION_CHILD_REPLY.replace('{parent}', () => parent), section.promptVariables)
   }
-  if (!section.gate.enabled) return ''
+  if (!section.gate.enabled || section.teamMode) return ''
+  if (!effectiveSelection(section, sessionId).enabled) {
+    return '本会话的子代理总开关已关闭。禁止调用子代理委派、续话、中止、工作流及 Agent 自助管理工具；不要根据历史对话、旧工具结果或记忆尝试调用。请自行完成当前任务；只有用户重新开启后，才可依据新一轮实际工具清单使用这些能力。'
+  }
   // 不可用的条目不出现在能力清单里：模型看到用不了的工具名只会白耗一轮
   // （典型是 `subagent_native` 声明的具名工具在当前预设里根本不存在）。
   const active = resolveActive(section, sessionId).filter(item => isAvailable(item.entry))
   const lines: string[] = [SECTION_HEADER]
   if (active.length === 0) {
-    lines.push(SECTION_EMPTY)
+    lines.push(`${SECTION_EMPTY} 禁止调用未在本轮启用的 Agent 工具，不要沿用历史工具名；请自行完成任务。`)
   } else {
     for (const item of active) lines.push(describeActiveEntry(item))
     lines.push(SECTION_PARALLEL)

@@ -92,6 +92,7 @@ export function apply(ctx: ClientContext): void {
         hooks: { obAgent: store },
         sessionId,
         setSession: next => store.setSession(next),
+        setTeamMode: next => store.patch({ teamMode: next }),
       }
     },
   }, ObAgentDock))

@@ -162,6 +162,8 @@ interface AgentState {
   denyAttempt: DenyAttempt | undefined
   /** 调谐中标记：把重入折叠成一次尾随重算。 */
   reconciling: boolean
+  work?: Promise<void>
+  stopped: boolean
   pending: boolean
   /** 子代理续话模式：判定出确定值后缓存（`unknown` 每次重算重试）。 */
   childMode: ChildContinuationMode
@@ -190,6 +192,7 @@ function stateOf(agent: AgentLike): AgentState {
       restricted: new Set<string>(),
       denyAttempt: undefined,
       reconciling: false,
+      stopped: false,
       pending: false,
       childMode: 'unknown',
       childReply: false,
@@ -554,7 +557,7 @@ async function installPlan(
     let activated = false
     const fiber = agent.ctx.inject(['tools', 'subagents', 'systemPrompt', 'sessionProjections'], async (runtimeCtx) => {
       try {
-        await module.apply(subagentContext(runtimeCtx, plan), plan.config, agent.session)
+        await module.apply(subagentContext(runtimeCtx, plan, deps.read().dshHome), plan.config, agent.session)
         activated = true
       } catch (error) {
         failure = error instanceof Error ? error.message : String(error)
@@ -690,24 +693,55 @@ async function installPlan(
 /** 协调一个 agent（可重入，重入折叠为一次尾随重算）。 */
 export async function reconcileAgent(deps: ReconcileDeps, agent: AgentLike): Promise<void> {
   const state = stateOf(agent)
+  if (state.stopped) return
   if (state.reconciling) {
     state.pending = true
-    return
+    return state.work
   }
   state.reconciling = true
-  try {
+  const work = (async () => {
     do {
       state.pending = false
-      // eslint-disable-next-line no-await-in-loop -- 尾随重算必须串行，避免并发改同一份状态
       await reconcileOnce(deps, agent, state)
-    } while (state.pending)
+    } while (state.pending && !state.stopped)
+  })()
+  state.work = work
+  try {
+    await work
   } finally {
+    state.work = undefined
     state.reconciling = false
   }
 }
 
 async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: AgentState): Promise<void> {
+  if (state.stopped) return
   const section = deps.read()
+  // 官方团队服务存在时也自动避让，避免用户从官方设置入口直接启用时继续重挂同名工具。
+  if (section.teamMode || deps.ctx.get('agentTeams') != null || !section.gate.enabled) {
+    state.denies = () => false
+    state.allowed.clear()
+    state.childReply = false
+    state.isAvailable = () => false
+    releaseRestrict(state)
+    state.restricted.clear()
+    state.denyAttempt = undefined
+    state.known.clear()
+    const installs = [...state.installs.values()]
+    state.installs.clear()
+    const base = state.base
+    state.base = undefined
+    state.scopedTools = undefined
+    // 先同步启动全部注销，不能逐项 await 留下其它同名工具等待下一次微任务。
+    const released = await Promise.allSettled([
+      ...installs.map(async install => { await install.dispose() }),
+      (async () => { await base?.dispose() })(),
+    ])
+    for (const result of released) {
+      if (result.status === 'rejected') deps.ctx.logger.warn(`dsh-ob-agent: 释放代理作用域失败：${String(result.reason)}`)
+    }
+    return
+  }
   const managing = section.gate.enabled
   const child = isChildAgent(agent)
   const active = managing && !child ? resolveActive(section, agent.session.id) : []
@@ -745,6 +779,7 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
       // 完全同源。直接 `agent.ctx.get('tools')` 拿到的实例不带作用域，`restrict` 会抛错。
       state.scopedTools = scopedTools
       scopedTools.guard((exec) => {
+        if (deps.read().teamMode || deps.ctx.get('agentTeams') != null || !deps.read().gate.enabled) return undefined
         const name = exec.name
         if (name === undefined || name === '') return undefined
         if (!state.denies(name)) return undefined
@@ -759,6 +794,7 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
         text: () => {
           try {
             const current = deps.read()
+            if (current.teamMode || deps.ctx.get('agentTeams') != null) return ''
             // 子代理只看回发说明，主会话看本会话的能力清单：两者的工具面本来就不同。
             return renderSectionText(
               current,
@@ -805,6 +841,10 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
 
   // 实现包必须在 inject 回调之外加载完成（回调保持同步）。
   await loadModules([...plans.values()].flatMap(modulesFor))
+  if (state.stopped || deps.read().teamMode || deps.ctx.get('agentTeams') != null || !deps.read().gate.enabled) {
+    state.pending = true
+    return
+  }
   const usable = new Map<string, InstallPlan>()
   for (const [key, plan] of plans) {
     const missing = modulesFor(plan).filter(name => moduleOf(name) === undefined)
@@ -852,6 +892,10 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
     docHint: () => '插件文档 docs/model-guide.md',
   }
   for (const [key, plan] of usable) {
+    if (state.stopped || deps.read().teamMode || deps.ctx.get('agentTeams') != null || !deps.read().gate.enabled) {
+      state.pending = true
+      break
+    }
     if (state.installs.has(key)) continue
     const installed = await installPlan(deps, agent, plan, authoring)
     if ('reason' in installed) {
@@ -874,6 +918,10 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
     })
   }
 
+  if (state.stopped || deps.read().teamMode || deps.ctx.get('agentTeams') != null || !deps.read().gate.enabled) {
+    state.pending = true
+    return
+  }
   // 隐藏层最后应用：此时允许集合与已安装集合都是最新的，拒绝名单一次算准。
   applyDenyLayer(deps, agent, state, section, tools)
 }
@@ -1094,6 +1142,13 @@ function releaseRestrict(state: AgentState): void {
 export async function disposeAgent(agent: AgentLike): Promise<void> {
   const state = states.get(agent)
   if (state === undefined) return
+  state.stopped = true
+  state.pending = false
+  try {
+    await state.work
+  } catch {
+    // 装配错误由调用方记录；销毁仍需完成余下释放。
+  }
   states.delete(agent)
   for (const install of state.installs.values()) {
     try {

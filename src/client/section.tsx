@@ -32,7 +32,7 @@ import { validateSection } from '../normalize.ts'
 import { IconChevronDown, IconChevronUp, IconCopy, IconPlus, IconSettings, IconTrash } from './host-ui.tsx'
 import type { ObAgentKey } from './locales.ts'
 import type { ModelCatalogResult } from './modelcatalog.ts'
-import type { ObAgentSnapshot } from './store.ts'
+import { settingsLocked, type ObAgentSnapshot } from './store.ts'
 
 /** 注入面：设置快照、原子写入、模型清单读取。 */
 export interface ObAgentSectionInjected {
@@ -566,6 +566,18 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
 
   const current = draft ?? snapshot.section
   const disabled = status.kind === 'saving' || !snapshot.writable
+  /**
+   * 团队模式：以草稿里的取值为准（切换后立刻反映到界面）。开启后本插件不接管代理：
+   * 除「智能体团队模式」开关本身（用来关掉它）之外，全局开关、条目选择与自助管理都不再可操作。
+   * 官方团队的实际启用状态由 DSH 官方管理，本插件既不读取也不代为开关。
+   *
+   * 两个锁由 store.settingsLocked 统一给出（离线测试覆盖）：
+   * `lockedByTeam` 用于其它字段，`teamModeLocked` 只受「保存中 / 设置只读」影响。
+   */
+  const teamMode = current.teamMode
+  const locks = settingsLocked({ writable: snapshot.writable, saving: status.kind === 'saving', teamMode })
+  const lockedByTeam = locks.others
+  const teamModeLocked = locks.teamModeSwitch
   const edit = (patchDraft: Partial<ObAgentSectionValue>): void => {
     setDraft({ ...current, ...patchDraft })
     setStatus({ kind: 'idle' })
@@ -591,6 +603,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
       promptVariables: [...current.promptVariables],
       autoEnableControlWithContinuable: current.autoEnableControlWithContinuable,
       childReplyToParent: current.childReplyToParent,
+      teamMode: current.teamMode,
       gate: { ...current.gate },
       authoring: { ...current.authoring },
       modelGuide: { ...current.modelGuide },
@@ -623,6 +636,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
       promptVariables: [...DEFAULT_SECTION.promptVariables],
       autoEnableControlWithContinuable: DEFAULT_SECTION.autoEnableControlWithContinuable,
       childReplyToParent: DEFAULT_SECTION.childReplyToParent,
+      teamMode: DEFAULT_SECTION.teamMode,
       gate: { ...DEFAULT_SECTION.gate },
       authoring: { ...DEFAULT_SECTION.authoring },
       modelGuide: { ...DEFAULT_SECTION.modelGuide },
@@ -650,6 +664,10 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
       <h2 className="dsh_obAgent_title">{t('settings.title')}</h2>
       <p className="dsh_obAgent_intro">{t('settings.subtitle')}</p>
 
+      {teamMode ? (
+        <span className="dsh_obAgent_teamHint" role="status">{t('settings.teamModeLockedNotice')}</span>
+      ) : null}
+
       {status.kind === 'error' && status.message !== undefined ? (
         <p className="dsh_obAgent_error" role="status">{status.message}</p>
       ) : null}
@@ -669,25 +687,35 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
               <span className="dsh_obAgent_cardName">{t('settings.global')}</span>
             </span>
           </div>
+          {/* 团队模式是「本插件是否接管代理」的总让位开关，因此排在全局卡片第一条。
+              它自己永远可操作（否则打开后就再也关不掉）：只跟「保存中 / 设置只读」有关，
+              不随团队模式锁定。安装与启用官方团队插件仍由用户在 DSH 官方插件页操作。 */}
+          <SwitchRow
+            label={t('settings.teamMode')}
+            desc={t('settings.teamModeDesc')}
+            checked={teamMode}
+            disabled={teamModeLocked}
+            onChange={(next) => { edit({ teamMode: next }) }}
+          />
           <SwitchRow
             label={t('settings.masterDefault')}
             desc={t('settings.masterDefaultDesc')}
             checked={current.masterEnabledDefault}
-            disabled={disabled}
+            disabled={lockedByTeam}
             onChange={masterEnabledDefault => { edit({ masterEnabledDefault }) }}
           />
           <SwitchRow
             label={t('settings.autoControl')}
             desc={t('settings.autoControlDesc')}
             checked={current.autoEnableControlWithContinuable}
-            disabled={disabled}
+            disabled={lockedByTeam}
             onChange={autoEnableControlWithContinuable => { edit({ autoEnableControlWithContinuable }) }}
           />
           <SwitchRow
             label={t('settings.childReply')}
             desc={t('settings.childReplyDesc')}
             checked={current.childReplyToParent}
-            disabled={disabled}
+            disabled={lockedByTeam}
             onChange={childReplyToParent => { edit({ childReplyToParent }) }}
           />
           <div className="dsh_obAgent_fields">
@@ -695,7 +723,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
               label={t('settings.guideInject')}
               desc={t('settings.guideInjectDesc')}
               value={current.modelGuide.inject}
-              disabled={disabled}
+              disabled={lockedByTeam}
               options={[
                 { value: 'path', label: 'path' },
                 { value: 'inline', label: 'inline' },
@@ -710,14 +738,14 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
               label={t('settings.readOnlyTools')}
               desc={t('settings.readOnlyToolsDesc')}
               initial={current.readOnlyTools}
-              disabled={disabled}
+              disabled={lockedByTeam}
               onChange={readOnlyTools => { edit({ readOnlyTools }) }}
             />
             <ListField
               label={t('settings.promptVariables')}
               desc={t('settings.promptVariablesDesc')}
               initial={current.promptVariables}
-              disabled={disabled}
+              disabled={lockedByTeam}
               onChange={promptVariables => { edit({ promptVariables }) }}
             />
           </div>
@@ -734,7 +762,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
                 size="sm"
                 variant="outline"
                 icon={<IconPlus />}
-                disabled={disabled || current.entries.length >= current.authoring.maxEntries}
+                disabled={lockedByTeam || current.entries.length >= current.authoring.maxEntries}
                 onClick={() => { editEntries([...current.entries, newEntry(t)]) }}
               >
                 {t('settings.entry.add')}
@@ -754,7 +782,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
                 t={t}
                 catalog={catalog}
                 globalReadOnly={current.readOnlyTools}
-                disabled={disabled}
+                disabled={lockedByTeam}
                 onEdit={(next) => {
                   editEntries(current.entries.map((item, i) => (i === index ? next : item)))
                 }}
@@ -794,14 +822,14 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
             label={t('settings.authoring.enabled')}
             desc={t('settings.authoring.enabledDesc')}
             checked={current.authoring.enabled}
-            disabled={disabled}
+            disabled={lockedByTeam}
             onChange={enabled => { edit({ authoring: { ...current.authoring, enabled } }) }}
           />
           <div className="dsh_obAgent_fields">
             <SelectField
               label={t('settings.authoring.scope')}
               value={current.authoring.scope}
-              disabled={disabled}
+              disabled={lockedByTeam}
               options={[
                 { value: 'own', label: t('settings.authoring.scope.own') },
                 { value: 'all', label: t('settings.authoring.scope.all') },
@@ -816,7 +844,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
                 type="number"
                 min={1}
                 value={current.authoring.maxEntries}
-                disabled={disabled}
+                disabled={lockedByTeam}
                 onChange={(event) => {
                   const value = Number.parseInt(event.target.value, 10)
                   edit({ authoring: { ...current.authoring, maxEntries: Number.isFinite(value) ? Math.max(1, value) : 1 } })
@@ -840,7 +868,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
                 label={t('settings.gate.enabled')}
                 desc={t('settings.gate.enabledDesc')}
                 checked={current.gate.enabled}
-                disabled={disabled}
+                disabled={lockedByTeam}
                 onChange={enabled => { edit({ gate: { ...current.gate, enabled } }) }}
               />
               <div className="dsh_obAgent_fields">
@@ -848,21 +876,21 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
                   label={t('settings.gate.prefixes')}
                   desc={t('settings.gate.prefixesDesc')}
                   initial={current.gate.prefixes}
-                  disabled={disabled}
+                  disabled={lockedByTeam}
                   onChange={prefixes => { edit({ gate: { ...current.gate, prefixes } }) }}
                 />
                 <ListField
                   label={t('settings.gate.tools')}
                   desc={t('settings.gate.toolsDesc')}
                   initial={current.gate.tools}
-                  disabled={disabled}
+                  disabled={lockedByTeam}
                   onChange={tools => { edit({ gate: { ...current.gate, tools } }) }}
                 />
                 <ListField
                   label={t('settings.gate.allow')}
                   desc={t('settings.gate.allowDesc')}
                   initial={current.gate.allow}
-                  disabled={disabled}
+                  disabled={lockedByTeam}
                   onChange={allow => { edit({ gate: { ...current.gate, allow } }) }}
                 />
               </div>
@@ -870,7 +898,7 @@ export function ObAgentSection(props: ObAgentSectionProps): JSX.Element {
                 label={t('settings.gate.reprovide')}
                 desc={t('settings.gate.reprovideDesc')}
                 initial={current.gate.reprovide}
-                disabled={disabled}
+                disabled={lockedByTeam}
                 onChange={reprovide => { edit({ gate: { ...current.gate, reprovide } }) }}
               />
             </div>

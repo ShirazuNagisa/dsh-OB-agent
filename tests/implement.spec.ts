@@ -57,10 +57,8 @@ describe('planSubagent', () => {
     expect(result.plan.kind).toBe('subagent')
     if (result.plan.kind !== 'subagent') return
     expect(result.plan.toolName).toBe('subagent_demo_session')
-    expect(result.plan.config).toMatchObject({
-      provider: 'spawn',
-      maxDepth: 3,
-    })
+    expect(result.plan.config).toMatchObject({ provider: 'spawn' })
+    expect(result.plan.config).not.toHaveProperty('maxDepth')
     expect(result.plan.identityPrompt).toBe('你是演示子代理')
     expect(result.plan.config).not.toHaveProperty('persona')
     expect(result.plan.config).not.toHaveProperty('toolFilter')

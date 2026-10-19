@@ -23,6 +23,14 @@ export const zh = {
   'dock.nativeGroup': 'DSH 原生工具',
   'dock.nativeGroupCount': '已启用 {n} 项',
   'dock.readonly': '设置当前为只读（未连接到主机）',
+  'dock.teamLocked': '智能体团队模式：本插件不接管代理，交由 DSH 官方团队',
+  'dock.teamLockedHint': '智能体团队模式已开启：本插件不接管代理，请在 DSH 官方的智能体团队里管理队员与任务。'
+    + '展开本面板可以关掉这个开关：但官方团队若仍然启用，主机仍会继续避让官方团队，需要先在官方插件页停用官方智能体团队。',
+  'dock.teamMode': '智能体团队模式',
+  'dock.teamKicker': '打开本开关即释放本插件对代理的接管，再由你到 DSH 官方插件页启用智能体团队；本开关不会替你安装或启用官方插件。'
+    + '关闭本开关只是恢复本插件接管；官方团队若还启用着，主机仍会避让官方团队。',
+  'dock.teamToggleLean': '本插件已让位，请在 DSH 官方插件页启用智能体团队（本开关不代你启用官方插件）。'
+    + '若官方团队已启用而你想回到本插件接管，请先在官方插件页停用官方团队再关闭本开关。',
   'mode.continuable': '可继续对话',
   'permission.readonly': '只读',
   'permission.full': '完全权限',
@@ -40,6 +48,14 @@ export const zh = {
   'settings.invalid': '校验未通过，未提交',
   'settings.unavailable': '插件配置不可用：请确认插件已安装到 profile 并重启 DSH。',
   'settings.global': '全局',
+  'settings.teamMode': '智能体团队模式',
+  'settings.teamModeDesc': '打开本开关即释放本插件对代理的接管（本插件的总开关与条目选择随之不可操作）；'
+    + '之后再请你到 DSH 官方插件页启用智能体团队——本开关不会替你安装或启用官方插件。'
+    + '关闭本开关只是恢复本插件接管：官方团队若仍然启用，主机仍会继续避让官方团队，需要先在官方插件页停用官方智能体团队。',
+  'settings.teamModeLocked': '智能体团队模式已开启：本插件的代理管理已让位（官方团队的实际启用状态由 DSH 官方管理，本插件不读取也不开关它）。'
+    + '以下开关与条目不可操作。',
+  'settings.teamModeLockedNotice': '请到 DSH 官方插件页启用智能体团队；官方团队若仍然启用，关闭本开关后主机仍会继续避让官方团队，'
+    + '需要先在官方插件页停用官方智能体团队，才能完全回到本插件接管。',
   'settings.masterDefault': '新会话默认打开总开关',
   'settings.masterDefaultDesc': '只影响新会话的初始状态；已有会话的选择记录保持不变。',
   'settings.autoControl': '自动放行续话与中止工具',
@@ -132,6 +148,14 @@ export const en = {
   'dock.nativeGroup': 'DSH native tools',
   'dock.nativeGroupCount': '{n} enabled',
   'dock.readonly': 'Settings are read-only (not connected to the host)',
+  'dock.teamLocked': 'Agent team mode: this plugin no longer takes over agents; the official DSH team does',
+  'dock.teamLockedHint': 'Agent team mode is on: this plugin no longer takes over agents, so manage teammates and tasks in the official DSH agent team. '
+    + 'Expand this panel to turn the switch off - but while the official team stays enabled the host keeps deferring to it, so disable the official agent team on the official plugin page first.',
+  'dock.teamMode': 'Agent team mode',
+  'dock.teamKicker': 'Turning this on releases this plugin\'s takeover of agents; enable the agent team afterwards on the official DSH plugin page. This switch never installs or enables the official plugin for you. '
+    + 'Turning it off only restores this plugin\'s takeover; while the official team stays enabled the host keeps deferring to it.',
+  'dock.teamToggleLean': 'This plugin has stepped aside; enable the agent team on the official DSH plugin page (this switch does not enable the official plugin). '
+    + 'To go back to this plugin\'s takeover while the official team is enabled, disable the official team first, then turn this off.',
   'mode.continuable': 'continuable',
   'permission.readonly': 'read-only',
   'permission.full': 'full access',
@@ -149,6 +173,12 @@ export const en = {
   'settings.invalid': 'Validation failed; nothing was written',
   'settings.unavailable': 'The settings namespace is unavailable: install the plugin into the profile and restart DSH.',
   'settings.global': 'Global',
+  'settings.teamMode': 'Agent team mode',
+  'settings.teamModeDesc': 'Turning this on releases this plugin\'s takeover of agents (the plugin master switch and entry selection become read-only); afterwards enable the agent team on the official DSH plugin page - this switch never installs or enables the official plugin. '
+    + 'Turning it off only restores this plugin\'s takeover: while the official team stays enabled the host keeps deferring to it, so disable the official agent team on the official plugin page first.',
+  'settings.teamModeLocked': 'Agent team mode is on: this plugin has stepped aside (the official team\'s real state is owned by DSH; this plugin neither reads nor toggles it), so the switches and entries below are read-only.',
+  'settings.teamModeLockedNotice': 'Enable the agent team on the official DSH plugin page. While the official team stays enabled, the host keeps deferring to it even after you turn this off; '
+    + 'disable the official agent team there to return fully to this plugin\'s takeover.',
   'settings.masterDefault': 'New sessions start with the master switch on',
   'settings.masterDefaultDesc': 'Only affects the initial state of new sessions; existing sessions keep their record.',
   'settings.autoControl': 'Auto-release continuation tools',

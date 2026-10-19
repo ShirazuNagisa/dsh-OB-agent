@@ -227,6 +227,8 @@ export function readSection(raw: unknown): ObAgentSection {
   const section: ObAgentSection = {
     defaultsRevision: readRevision(value.defaultsRevision),
     masterEnabledDefault: readBoolean(value.masterEnabledDefault) ?? DEFAULT_SECTION.masterEnabledDefault,
+    teamMode: readBoolean(value.teamMode) ?? DEFAULT_SECTION.teamMode,
+    ...(typeof value.dshHome === 'string' && value.dshHome.trim() !== '' ? { dshHome: value.dshHome } : {}),
     readOnlyTools: readStrings(value.readOnlyTools) ?? [...DEFAULT_SECTION.readOnlyTools],
     promptVariables: readStrings(value.promptVariables) ?? [...DEFAULT_SECTION.promptVariables],
     autoEnableControlWithContinuable:

@@ -50,8 +50,8 @@ export const DEFAULTS_REVISION = 4
 export const RENAMED_BUILTINS: Readonly<Record<string, string>> = { code_audit: 'code_review' }
 
 /**
- * 内置「代码审查」条目：唯一内置审查角色，沿用原审计模型
- * （钉死 `opencode-go/hy4-preview`）。保留文件改动即触发初次审查，同时限制复审成本。
+ * 内置「代码审查」条目：新安装继承 DSH 模型设置。
+ * 已保存条目的显式路由由迁移保留，不改写用户选择。
  */
 const CODE_REVIEW: ObAgentEntry = {
   id: 'code_review',
@@ -78,7 +78,6 @@ const CODE_REVIEW: ObAgentEntry = {
   ].join('\n'),
   modes: ['continuable'],
   provider: 'spawn',
-  model: { provider: 'opencode-go', model: 'hy4-preview' },
   permission: 'full',
 }
 
@@ -229,6 +228,7 @@ export const BUILTIN_ENTRIES: readonly ObAgentEntry[] = [
 export const DEFAULT_SECTION: ObAgentSection = Object.freeze({
   defaultsRevision: DEFAULTS_REVISION,
   masterEnabledDefault: false,
+  teamMode: false,
   readOnlyTools: DEFAULT_READ_ONLY_TOOLS,
   promptVariables: DEFAULT_PROMPT_VARIABLES,
   autoEnableControlWithContinuable: true,

@@ -32,10 +32,18 @@ export { Config }
  */
 export function apply(ctx: HostContext, config: PluginConfig): void {
   // 安全策略必须先于异步协调器完成，读取失败会否决插件子代理的发布。
-  installChildPolicies(ctx)
   let section: ObAgentSection = readPluginConfig(config)
+  installChildPolicies(ctx, () => section.dshHome)
   let scope: { update(patch: object): Promise<void> } | undefined
   let queued = false
+  let active = true
+  const ownedAgents = new Set<AgentLike>()
+  ctx.effect(() => () => {
+    active = false
+    const agents = [...ownedAgents]
+    ownedAgents.clear()
+    return Promise.all(agents.map(agent => disposeAgent(agent))).then(() => undefined)
+  }, 'dsh-ob-agent: scoped registrations')
 
   /** 读取当前 live Config（设置未就绪时给出厂默认）。 */
   const read = (): ObAgentSection => section
@@ -50,19 +58,19 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
 
   /** 全量重算所有顶层与子代理（幂等；并发由协调器内部折叠）。 */
   const runAll = async (): Promise<void> => {
+    if (!active) return
     const agents = ctx.get('agents') as AgentRegistryLike | undefined
     if (agents === undefined) return
-    for (const agent of agents.list()) {
+    await Promise.all(agents.list().map(async agent => {
+      ownedAgents.add(agent)
       try {
-        // 串行：同一份设置快照下逐个 agent 应用，避免设置热更新时的交叉状态。
-        // eslint-disable-next-line no-await-in-loop
         await reconcileAgent(deps, agent)
       } catch (error) {
         ctx.logger.warn(
           `dsh-ob-agent: 协调 agent ${agent.id} 失败：${error instanceof Error ? error.message : String(error)}`,
         )
       }
-    }
+    }))
   }
 
   /** 合并同一轮内的多次触发（设置提交、工具变更、agent 创建）。 */
@@ -75,7 +83,7 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
     })
   }
 
-  ctx.on('settings/document-updated', (entryId: string) => {
+  ctx.on('settings/document-updated', async (entryId: string) => {
     if (entryId !== 'dsh-ob-agent') return
     const parsed = readPluginConfig(config)
     const errors = validate(parsed)
@@ -83,7 +91,7 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
       ctx.logger.warn(`dsh-ob-agent: 插件配置存在问题（已按可用部分继续）：${errors.join('；')}`)
     }
     section = parsed
-    schedule()
+    await runAll()
   })
 
   ctx.inject(['configEditor'], (editorCtx) => {
@@ -115,7 +123,8 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
     try {
       // 新版宿主串行等待创建监听；首个模型请求前完成工具装配。安全策略由前置监听独立否决。
       const agent = payload?.agent
-      if (agent === undefined) return
+      if (agent === undefined || !active) return
+      ownedAgents.add(agent)
       await reconcileAgent(deps, agent).catch(error => {
         ctx.logger.warn(
           `dsh-ob-agent: 初始化 agent ${agent.id} 失败：${error instanceof Error ? error.message : String(error)}`,
@@ -129,6 +138,7 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
   ctx.on('agent/disposed', (payload: { agent: AgentLike }) => {
     const agent = payload?.agent
     if (agent === undefined) return
+    ownedAgents.delete(agent)
     void disposeAgent(agent)
   })
 
@@ -136,6 +146,12 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
   ctx.on('tools/change', () => schedule())
   ctx.on('subagent/provider-added', () => schedule())
   ctx.on('subagent/provider-removed', () => schedule())
+
+  ctx.inject(['agentTeams'], teamCtx => {
+    // 服务先就绪时即释放 OB 工具；冷启动与官方入口启用都走同一避让路径。
+    void runAll()
+    teamCtx.effect(() => () => schedule(), 'dsh-ob-agent: team handoff')
+  })
 
   // 首次装配：已有 agent（HMR / 重新挂载）也要纳入管理。
   schedule()
@@ -145,6 +161,8 @@ function readPluginConfig(config: PluginConfig): ObAgentSection {
   return readSection({
     defaultsRevision: config.defaultsRevision.get(),
     masterEnabledDefault: config.masterEnabledDefault.get(),
+    teamMode: config.teamMode.get(),
+    dshHome: config.dshHome?.get(),
     readOnlyTools: config.readOnlyTools.get(),
     promptVariables: config.promptVariables.get(),
     autoEnableControlWithContinuable: config.autoEnableControlWithContinuable.get(),

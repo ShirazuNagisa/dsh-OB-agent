@@ -13,17 +13,18 @@
  *
  * 升级 DSH 后请务必跑一次：`npm test`。任何一条挂掉都说明本插件的使用面假设已经过时。
  */
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { authoringTools, type AuthoringDeps } from '../src/authoring.ts'
-import { DEFAULT_SECTION } from '../src/defaults.ts'
+import { DEFAULT_SECTION, SECTION_HEADER } from '../src/defaults.ts'
 import { readSection } from '../src/normalize.ts'
 import type { AgentLike, HostContext, ToolDefinitionLike } from '../src/context-types.ts'
 import { applyChildPolicy, subagentContext } from '../src/subagent-compat.ts'
 import { planSubagent } from '../src/implement.ts'
+import { reconcileAgent, type ReconcileDeps } from '../src/reconcile.ts'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 
@@ -75,6 +76,65 @@ if (dshRoot === undefined) {
 /** 以绝对路径导入 DSH 包的主入口（绕开只解析本仓库依赖的打包器）。 */
 async function loadDsh(specifier: string): Promise<Record<string, unknown>> {
   const entry = join(dshRoot as string, ...specifier.split('/'), 'lib', 'index.js')
+  return await import(pathToFileURL(entry).href) as Record<string, unknown>
+}
+
+/**
+ * 官方 Agent Teams 组合包：随 DSH 提供但**默认关闭**，因此可能根本不在 profile 里。
+ *
+ * 与 `CORE_PACKAGES` 的区别：核心包缺失必须让测试失败（升级后的真实不兼容不能被跳过掩盖），
+ * 而实验组合包缺失只说明这台机器没启用团队，跳过是正确结论。
+ */
+const TEAM_PACKAGES = ['@deepseek-ai/dsh-experimental-tool-agent-team'] as const
+
+/** 官方 Team 工具包注册的全部模型工具名（`spawn_teammate` 到 `team_task_update`）。 */
+const TEAM_TOOL_NAMES = [
+  'spawn_teammate',
+  'send_message',
+  'list_agents',
+  'wait_agent',
+  'interrupt_agent',
+  'team_task_create',
+  'team_task_list',
+  'team_task_get',
+  'team_task_update',
+] as const
+
+/**
+ * 解析官方 Agent Teams 实验包的加载根；找不到时返回 undefined（本组跳过）。
+ *
+ * 为什么不直接用 `dshRoot`：profile 只装它声明过的包，默认关闭的组合包通常不在其中；但 profile
+ * 里的官方包在 Windows 上是指向宿主 `node_modules` 的 junction（ReparsePoint），跟随任一已装
+ * 核心包的真实位置就能落到**同一份运行时**的 `node_modules`，那里实验包与核心包是同版本副本，
+ * 混用不会产生模块身份错位。也可以用 `DSH_TEAM_NODE_MODULES` 显式指定。
+ */
+function resolveTeamRoot(): string | undefined {
+  const candidates: string[] = []
+  const fromEnv = process.env.DSH_TEAM_NODE_MODULES
+  if (fromEnv !== undefined && fromEnv !== '') candidates.push(fromEnv)
+  if (dshRoot !== undefined) {
+    try {
+      // `<root>/@deepseek-ai/dsh-tools` → 真实位置 → 上两级即它的 `node_modules`。
+      candidates.push(dirname(dirname(realpathSync(join(dshRoot, '@deepseek-ai', 'dsh-tools')))))
+    } catch {
+      // 解析不出真实位置时只保留显式环境变量候选。
+    }
+  }
+  return candidates.find(root => TEAM_PACKAGES.every(name => existsSync(join(root, ...name.split('/'), 'package.json'))))
+}
+
+const teamRoot = resolveTeamRoot()
+
+if (teamRoot === undefined) {
+  console.warn(
+    '[dsh-compat] 未找到官方 Agent Teams 实验包（可设 DSH_TEAM_NODE_MODULES 指向其 node_modules），'
+    + '团队共存回归已跳过',
+  )
+}
+
+/** 以绝对路径导入 Agent Teams 实验包的主入口。 */
+async function loadTeam(specifier: string): Promise<Record<string, unknown>> {
+  const entry = join(teamRoot as string, ...specifier.split('/'), 'lib', 'index.js')
   return await import(pathToFileURL(entry).href) as Record<string, unknown>
 }
 
@@ -306,6 +366,155 @@ suite('DSH 运行时兼容：工具登记表', () => {
       expect(runtime.scopeCtx.tools.get('workflow', runtime.agentKey)).toBeDefined()
       expect(runtime.scopeCtx.tools.get('ralph', runtime.agentKey)).toBeDefined()
       for (const name of ['send_message', 'interrupt_agent', 'list_agents']) expect(runtime.scopeCtx.tools.get(name, runtime.agentKey)).toBeDefined()
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it.skipIf(teamRoot === undefined)(
+    '官方 Agent Teams 与 OB 同作用域：OB 让位后团队可注册，团队移除后 OB 恢复', async () => {
+    const runtime = await boot()
+    const host = runtime.rootCtx as unknown as { provide(name: string, value: unknown): void }
+    /** Team 服务替身：只回答成员身份与消息去向，绝不发模型请求。 */
+    const delivered: string[] = []
+    const membership = { id: 'team-1', role: 'lead', name: 'lead' }
+    const agentTeams = {
+      tryMembership: () => membership,
+      membership: () => membership,
+      listMembers: () => [{ id: 'team-1', name: 'lead', role: 'lead', status: 'running', diagnostics: [] }],
+      sendMessage: async (_caller: unknown, request: { target: string }) => { delivered.push(request.target) },
+      spawnTeammate: async () => ({ member: membership }),
+      waitForChange: async () => ({ timedOut: false }),
+      interrupt: () => ({ previousStatus: 'running' }),
+      createTask: async () => undefined,
+      getTask: () => undefined,
+      updateTask: async () => undefined,
+      listTasks: () => [],
+    }
+    const agent = Object.assign(runtime.agentKey, {
+      ctx: runtime.scopeCtx,
+      session: { id: 'compat-agent', header: { id: 'compat-agent' } },
+    })
+    // 本插件的装配路径需要这些服务在场；这里只满足「服务存在」，不真的创建子代理。
+    host.provide('subagents', {
+      getProvider: (name: string) => ({
+        name,
+        inheritsParentContext: false,
+        capabilities: { depthLimit: true, agentOptions: true },
+        prepareContinuable: () => Promise.resolve({}),
+      }),
+      resolveMaxDepth: (n: number) => n,
+      sendMessage: () => Promise.resolve(),
+      interrupt: () => undefined,
+    })
+    host.provide('sessionProjections', { register: () => () => undefined, stateOf: () => undefined })
+    host.provide('agents', { list: () => [agent] })
+
+    const raw = {
+      ...DEFAULT_SECTION,
+      teamMode: false,
+      autoEnableControlWithContinuable: false,
+      sessions: { 'compat-agent': { enabled: true, selected: ['agents_control', 'agents_list'] } },
+    }
+    let section = readSection(raw)
+    const deps: ReconcileDeps = {
+      ctx: runtime.rootCtx as unknown as HostContext,
+      read: () => section,
+      scope: undefined,
+    }
+    const owned = (name: string): { description?: string } | undefined =>
+      runtime.scopeCtx.tools.get(name, runtime.agentKey) as { description?: string } | undefined
+    const team = await loadTeam(TEAM_PACKAGES[0])
+    const teamApply = team.apply as (ctx: unknown, config?: unknown) => void
+    /**
+     * 造一个「agent 自有作用域的注入面」。
+     *
+     * 官方 Team 用 `agent.ctx.systemPrompt` / `agent.ctx.tools` **属性访问**取服务，而 cordis
+     * 只允许在声明过 inject 的上下文上这样取；直接拿作用域上下文会在
+     * `cannot get property "systemPrompt" without inject` 处提前失败，就测不到重名本身。
+     * 注册仍落在同一个 agent 作用域：注入面是作用域上下文的子级，作用域键不变。
+     */
+    const injectedScope = async (): Promise<{ ctx: HostContext; dispose(): Promise<void> }> => {
+      let captured: HostContext | undefined
+      const fiber = (runtime.scopeCtx as unknown as HostContext)
+        .inject(['tools', 'systemPrompt'], scoped => { captured = scoped })
+      if (fiber.await === undefined) throw new Error('当前 DSH 缺少可等待的作用域装配接口')
+      await fiber.await()
+      if (captured === undefined) throw new Error('工具与提示词服务未就绪')
+      return { ctx: captured, dispose: async () => { await fiber.dispose() } }
+    }
+    const teamMember = (ctx: unknown): unknown => ({
+      id: 'compat-agent',
+      ctx,
+      session: { id: 'compat-agent', header: { id: 'compat-agent' } },
+    })
+    /**
+     * 团队只从「它拿到的上下文」读服务：代理只替换 `agentTeams` / `agents`，Team 服务因此不会
+     * 真的进宿主（否则本插件的自动避让会被顺带触发，就测不到 `teamMode` 这条路径本身）。
+     */
+    const withTeam = (ctx: object, member: unknown): unknown => new Proxy(ctx, {
+      get(target, property) {
+        if (property === 'agentTeams') return agentTeams
+        if (property === 'agents') return { list: () => [member] }
+        return Reflect.get(target, property, target)
+      },
+    })
+
+    try {
+      // ① 闸门打开时，本插件在 agent 自有层重挂全局控制工具。
+      await reconcileAgent(deps, agent)
+      expect(owned('send_message')).toBeDefined()
+      expect(owned('interrupt_agent')).toBeDefined()
+      expect(owned('list_agents')).toBeDefined()
+
+      // ② 同一作用域的同名注册被真实登记表拒绝 —— 这正是官方团队启用失败的原因（不再是推测）。
+      const conflict = await injectedScope()
+      expect(() => teamApply(withTeam(conflict.ctx as unknown as object, teamMember(conflict.ctx))))
+        .toThrow(/already registered in this scope/)
+      await conflict.dispose()
+
+      // ③ 打开 teamMode：本插件释放自己装配的全部工具，把控制面交还官方团队。
+      section = readSection({ ...raw, teamMode: true })
+      await reconcileAgent(deps, agent)
+      expect(owned('send_message')).toBeUndefined()
+      expect(owned('interrupt_agent')).toBeUndefined()
+      expect(owned('list_agents')).toBeUndefined()
+      // 提示词同样让位：代理能力清单段不再出现（团队自有的 team:policy 才是本会话的权威说明）。
+      const prompt = runtime.rootCtx.systemPrompt as { assemble(context: unknown): unknown }
+      expect(JSON.stringify(await prompt.assemble({ scope: runtime.agentKey }))).not.toContain(SECTION_HEADER)
+
+      // ④ 团队整包装配成功：九个 Team 工具全部落在同一个 agent 作用域。
+      const teamScope = await injectedScope()
+      teamApply(withTeam(teamScope.ctx as unknown as object, teamMember(teamScope.ctx)))
+      for (const name of TEAM_TOOL_NAMES) expect(owned(name), `${name} 必须由团队注册`).toBeDefined()
+      const teamSend = owned('send_message')
+      expect(teamSend?.description).toContain('Team member')
+
+      // ⑤ 执行层不干扰：闸门名单里就有 send_message，让位后它挂团队实现仍能真正执行。
+      const tools = runtime.scopeCtx.tools as unknown as {
+        execute(exec: unknown): Promise<{ isError?: boolean }>
+      }
+      const executed = await tools.execute({
+        callId: 'team-send',
+        name: 'send_message',
+        arguments: { target: 'lead', message: '同步进度' },
+        agent: runtime.agentKey,
+        signal: new AbortController().signal,
+      })
+      expect(executed.isError).toBeFalsy()
+      expect(delivered).toEqual(['lead'])
+
+      // ⑥ 团队移除后本插件恢复自己的装配：同名工具换回全局控制实现。
+      await teamScope.dispose()
+      for (const name of TEAM_TOOL_NAMES) expect(owned(name), `${name} 必须随团队卸载`).toBeUndefined()
+      section = readSection(raw)
+      await reconcileAgent(deps, agent)
+      expect(owned('send_message')).toBeDefined()
+      expect(owned('send_message')).not.toBe(teamSend)
+      // 记住控制工具的替身文案不参与断言：本仓库装不进上游实现包，单测走 `tests/stubs` 的同形替身。
+      expect(owned('send_message')?.description).not.toContain('Team member')
+      expect(owned('interrupt_agent')).toBeDefined()
+      expect(owned('list_agents')).toBeDefined()
     } finally {
       await runtime.dispose()
     }

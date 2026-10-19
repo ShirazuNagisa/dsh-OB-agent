@@ -213,8 +213,8 @@ describe('migrateSection', () => {
     expect(result.changed).toBe(true)
     expect(result.section.defaultsRevision).toBe(DEFAULTS_REVISION)
     expect(result.section.entries.map(entry => entry.id)).toEqual(['code_review', 'mine', 'workflow'])
-    // 改名后的条目取最新出厂提示词与 hy4 模型，旧提示词不残留
-    expect(result.section.entries[0]?.model).toEqual({ provider: 'opencode-go', model: 'hy4-preview' })
+    // 原审查条目没有显式路由，迁移后仍继承 DSH；旧提示词按既有规则更新。
+    expect(result.section.entries[0]?.model).toBeUndefined()
     expect(result.section.entries[0]?.whenPrompt).not.toBe('旧提示词')
     expect(result.section.entries[1]).toEqual(legacySection().entries[3])
   })

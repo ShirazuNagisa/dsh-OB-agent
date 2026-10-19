@@ -106,9 +106,8 @@ export const OB_AGENT_CSS = `
   height: 14px;
   place-items: center;
   color: var(--dsw-alias-label-tertiary);
-  transition: transform 0.12s;
 }
-.dsh_obAgent_chevronOpen { transform: rotate(180deg); }
+/* 开合方向由组件直接选择图标，不叠加旋转样式。 */
 .dsh_obAgent_switch { flex: none; margin-right: 6px; }
 
 /* 条目列表：与官方 dock 列表同样的高度上限与滚动条令牌 */
@@ -188,6 +187,24 @@ export const OB_AGENT_CSS = `
 /* ── 通用文字 ─────────────────────────────────────────────────────────── */
 .dsh_obAgent_hint { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
 .dsh_obAgent_error { color: var(--dsw-alias-state-error-primary); font-size: 12px; line-height: 18px; }
+/* 团队模式说明：比普通提示更醒目一点（它解释为什么整块界面不可操作），仍取设计令牌。 */
+.dsh_obAgent_teamHint { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
+
+/* dock 展开面板里的「智能体团队模式」行：左侧文字块 + 右侧开关。
+   它是团队模式下唯一还能操作的控件（用来退出团队模式），因此不复用条目行的禁用样式。
+   与设置页的 .dsh_obAgent_switchRow 同形，但纵向间距按 dock 的行高节奏收紧。 */
+.dsh_obAgent_teamRow {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 12px;
+  box-shadow: inset 0 -1px 0 var(--dsw-alias-border-l1);
+}
+.dsh_obAgent_teamText { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; }
+.dsh_obAgent_teamTitle { color: var(--dsw-alias-label-primary); font-size: 13px; font-weight: 500; line-height: 20px; }
+.dsh_obAgent_teamSwitch { flex: none; }
 .dsh_obAgent_code { color: var(--dsw-alias-label-caption); font-family: var(--ds-font-family-code); font-size: 11px; line-height: 16px; }
 
 /* ── 设置页：与「模型」设置页同一套栅格 ──────────────────────────────── */

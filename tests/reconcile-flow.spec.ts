@@ -477,3 +477,42 @@ describe('reconcileAgent：能力清单只列真的装上了的条目', () => {
     expect(h.warnings).toEqual([])
   })
 })
+
+describe('reconcileAgent：团队模式交还官方管理', () => {
+  it('切换后释放回发工具、隐藏层和旧提示，切回后重新装配并恢复限制', async () => {
+    const h = harness({ origin: 'subagent', parentSession: 'parent-1', events: [descriptor('continuable')], inherited: INHERITED })
+    await reconcileAgent(h.deps, h.agent)
+    expect(h.registered.has('send_message')).toBe(true)
+    expect(h.visibleTools()).not.toContain('subagent_general_session')
+    h.use(readSection({ ...DEFAULT_SECTION, teamMode: true }))
+    await reconcileAgent(h.deps, h.agent)
+    expect(h.registered.size).toBe(0)
+    expect(h.visibleTools()).toContain('subagent_general_session')
+    expect(h.promptText()).toBe('')
+    expect(h.guards.every(guard => guard({ name: 'subagent_general_session' }) === undefined)).toBe(true)
+    h.use(readSection(DEFAULT_SECTION))
+    await reconcileAgent(h.deps, h.agent)
+    expect(h.registered.has('send_message')).toBe(true)
+    expect(h.visibleTools()).not.toContain('subagent_general_session')
+    expect(h.promptText()).toContain('send_message')
+  })
+
+  it('官方服务已经存在时，插件不注册、不隐藏、不提示，也不阻止团队工具', async () => {
+    const h = harness({ inherited: ['spawn_teammate', 'send_message', 'list_agents', 'team_task_list'] })
+    Object.assign(h.deps.ctx, { get: (name: string) => name === 'agentTeams' ? {} : undefined })
+    await reconcileAgent(h.deps, h.agent)
+    expect(h.registered.size).toBe(0)
+    expect(h.restrictCalls).toEqual([])
+    expect(h.guards).toEqual([])
+    expect(h.promptText()).toBe('')
+    expect(h.visibleTools()).toContain('send_message')
+  })
+
+  it('关闭总开关后动态提示明确禁止沿用历史工具', async () => {
+    const h = harness({ inherited: INHERITED })
+    await reconcileAgent(h.deps, h.agent)
+    expect(h.promptText()).toContain('禁止调用')
+    expect(h.promptText()).toContain('历史对话')
+    expect(h.promptText()).not.toContain('本会话已启用以下')
+  })
+})

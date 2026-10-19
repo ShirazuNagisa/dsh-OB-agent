@@ -112,6 +112,10 @@ export interface ObAgentSection {
   /** 落盘时的出厂默认版本；低于当前 `DEFAULTS_REVISION` 时由迁移改写（见 normalize.ts）。 */
   readonly defaultsRevision: number
   readonly masterEnabledDefault: boolean
+  /** 启用后释放本插件的工具、闸门和提示词，由 DSH 官方管理团队。 */
+  readonly teamMode: boolean
+  /** 显式 DSH 数据根目录；缺省遵循宿主路径解析。 */
+  readonly dshHome?: string
   readonly readOnlyTools: readonly string[]
   readonly promptVariables: readonly string[]
   readonly autoEnableControlWithContinuable: boolean

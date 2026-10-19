@@ -20,7 +20,7 @@ describe('内置条目表', () => {
     expect(validateSection(readSection(DEFAULT_SECTION))).toEqual([])
   })
 
-  it('子代理角色只有「代码审查」与「通用子代理」，前者沿用 hy4 审计模型', () => {
+  it('子代理角色只有「代码审查」与「通用子代理」，新安装均继承 DSH 模型', () => {
     const roles = BUILTIN_ENTRIES.filter(entry => entry.kind === 'subagent')
     expect(roles.map(entry => entry.id)).toEqual(['code_review', 'general'])
     const review = roles[0]
@@ -37,7 +37,7 @@ describe('内置条目表', () => {
     expect(review?.whenPrompt).toContain('用户明确要求审查')
     expect(review?.identityPrompt).toContain('有现实影响')
     expect(review?.identityPrompt).toContain('不为凑数')
-    expect(review?.model).toEqual({ provider: 'opencode-go', model: 'hy4-preview' })
+    expect(review?.model).toBeUndefined()
     expect(subagentToolName('code_review', 'continuable')).toBe('subagent_code_review_session')
     expect(subagentToolName('general', 'continuable')).toBe('subagent_general_session')
   })

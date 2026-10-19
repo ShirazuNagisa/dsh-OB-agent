@@ -9,6 +9,8 @@ import { DEFAULT_SECTION } from './defaults.ts'
 export const Config = z.object({
   defaultsRevision: z.number().default(DEFAULT_SECTION.defaultsRevision).volatile(),
   masterEnabledDefault: z.boolean().default(DEFAULT_SECTION.masterEnabledDefault).volatile(),
+  teamMode: z.boolean().default(DEFAULT_SECTION.teamMode).volatile(),
+  dshHome: z.string().volatile(),
   readOnlyTools: z.array(z.string()).default(DEFAULT_SECTION.readOnlyTools).volatile(),
   promptVariables: z.array(z.string()).default(DEFAULT_SECTION.promptVariables).volatile(),
   autoEnableControlWithContinuable: z.boolean().default(DEFAULT_SECTION.autoEnableControlWithContinuable).volatile(),
@@ -23,6 +25,8 @@ export const Config = z.object({
 export interface PluginConfig {
   defaultsRevision: { get(): unknown }
   masterEnabledDefault: { get(): unknown }
+  teamMode: { get(): unknown }
+  dshHome?: { get(): unknown }
   readOnlyTools: { get(): unknown }
   promptVariables: { get(): unknown }
   autoEnableControlWithContinuable: { get(): unknown }

@@ -168,7 +168,9 @@ describe('renderSectionText', () => {
 
   it('总开关关闭时说明「尚未启用任何 Agent 工具」', () => {
     const text = renderSectionText(sectionOf(), 's1', 'doc')
-    expect(text).toContain('尚未启用任何 Agent 工具')
+    expect(text).toContain('禁止调用')
+    expect(text).toContain('总开关已关闭')
+    expect(text).toContain('历史对话')
     expect(text).not.toContain('并行：')
   })
 

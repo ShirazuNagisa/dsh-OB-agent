@@ -31,7 +31,6 @@ export interface SubagentInstallPlan {
   readonly config: {
     readonly provider: string
     readonly toolName: string
-    readonly maxDepth: number
     readonly agentOptions?: { provider: string; model: string; reasoningEffort?: string }
   }
 }
@@ -102,7 +101,6 @@ export function planSubagent(
       config: {
         provider: entry.provider,
         toolName,
-        maxDepth: 3,
         ...(entry.model !== undefined
           ? {
               agentOptions: {
