@@ -27,7 +27,7 @@ describe('内置条目表', () => {
     expect(review?.name).toBe('代码审查')
     expect(review?.defaultEnabled).toBe(false)
     expect(review?.permission).toBe('full')
-    expect(review?.modes).toEqual(['one-shot'])
+    expect(review?.modes).toEqual(['continuable'])
     expect(review?.whenPrompt).toContain('每次实际修改文件后都立即调用代码审查（包括代码、配置和文档）')
     expect(review?.whenPrompt).toContain('一次工具调用同时修改多个文件时只审查一次')
     expect(review?.whenPrompt).toContain('后续独立的文件修改仍需再次触发')
@@ -38,7 +38,7 @@ describe('内置条目表', () => {
     expect(review?.identityPrompt).toContain('有现实影响')
     expect(review?.identityPrompt).toContain('不为凑数')
     expect(review?.model).toEqual({ provider: 'opencode-go', model: 'hy4-preview' })
-    expect(subagentToolName('code_review', 'one-shot')).toBe('subagent_code_review')
+    expect(subagentToolName('code_review', 'continuable')).toBe('subagent_code_review_session')
     expect(subagentToolName('general', 'continuable')).toBe('subagent_general_session')
   })
 

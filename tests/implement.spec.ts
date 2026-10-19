@@ -24,7 +24,7 @@ function entryOf(patch: Partial<ObAgentEntry>): ObAgentEntry {
     description: '',
     whenPrompt: '需要时调用',
     identityPrompt: '你是演示子代理',
-    modes: ['one-shot'],
+    modes: ['continuable'],
     provider: 'spawn',
     permission: 'full',
     ...patch,
@@ -33,8 +33,8 @@ function entryOf(patch: Partial<ObAgentEntry>): ObAgentEntry {
 
 describe('subagentToolName', () => {
   it('按模式派生工具名', () => {
-    expect(subagentToolName('code_review', 'one-shot')).toBe('subagent_code_review')
     expect(subagentToolName('code_review', 'continuable')).toBe('subagent_code_review_session')
+    expect(subagentToolName('general', 'continuable')).toBe('subagent_general_session')
   })
 })
 
@@ -51,20 +51,20 @@ describe('effectiveReadOnly', () => {
 
 describe('planSubagent', () => {
   it('完全权限下不生成工具白名单，并按模式生成配置', () => {
-    const result = planSubagent(entryOf({}), 'one-shot', DEFAULT_SECTION, context())
+    const result = planSubagent(entryOf({}), 'continuable', DEFAULT_SECTION, context())
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.plan.kind).toBe('subagent')
     if (result.plan.kind !== 'subagent') return
-    expect(result.plan.toolName).toBe('subagent_demo')
+    expect(result.plan.toolName).toBe('subagent_demo_session')
     expect(result.plan.config).toMatchObject({
       provider: 'spawn',
-      backgroundMode: 'one-shot',
-      enableRunInBackground: true,
       maxDepth: 3,
-      persona: '你是演示子代理',
     })
-    expect(result.plan.config.toolFilter).toBeUndefined()
+    expect(result.plan.identityPrompt).toBe('你是演示子代理')
+    expect(result.plan.config).not.toHaveProperty('persona')
+    expect(result.plan.config).not.toHaveProperty('toolFilter')
+    expect(result.plan.readOnlyAllow).toBeUndefined()
     expect(result.plan.config.agentOptions).toBeUndefined()
   })
 
@@ -74,24 +74,26 @@ describe('planSubagent', () => {
     expect(result.ok).toBe(true)
     if (!result.ok || result.plan.kind !== 'subagent') return
     expect(result.plan.toolName).toBe('subagent_demo_session')
-    expect(result.plan.config.backgroundMode).toBe('continuable')
+    expect(result.plan.mode).toBe('continuable')
+    expect(result.plan.config).not.toHaveProperty('backgroundMode')
     expect(result.plan.config.agentOptions).toEqual({ provider: 'p', model: 'm', reasoningEffort: 'high' })
   })
 
   it('只读权限把交集写进工具白名单', () => {
-    const result = planSubagent(entryOf({ permission: 'readonly' }), 'one-shot', DEFAULT_SECTION, context())
+    const result = planSubagent(entryOf({ permission: 'readonly' }), 'continuable', DEFAULT_SECTION, context())
     expect(result.ok).toBe(true)
     if (!result.ok || result.plan.kind !== 'subagent') return
-    expect(result.plan.config.toolFilter).toEqual({ allow: ['read', 'read_image', 'glob', 'grep'] })
+    expect(result.plan.readOnlyAllow).toEqual(['read', 'read_image', 'glob', 'grep', 'send_message'])
+    expect(result.plan.config).not.toHaveProperty('toolFilter')
   })
 
   it('只读交集为空时判定为不可用，且不降级为完全权限', () => {
-    const result = planSubagent(entryOf({ permission: 'readonly' }), 'one-shot', DEFAULT_SECTION, context(['pwsh']))
+    const result = planSubagent(entryOf({ permission: 'readonly' }), 'continuable', DEFAULT_SECTION, context(['pwsh']))
     expect(result).toEqual({ ok: false, reason: UNAVAILABLE_READONLY })
   })
 
   it('fork 后端同样受支持', () => {
-    const result = planSubagent(entryOf({ provider: 'fork' }), 'one-shot', DEFAULT_SECTION, context())
+    const result = planSubagent(entryOf({ provider: 'fork' }), 'continuable', DEFAULT_SECTION, context())
     expect(result.ok).toBe(true)
     if (!result.ok || result.plan.kind !== 'subagent') return
     expect(result.plan.config.provider).toBe('fork')

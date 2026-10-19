@@ -21,7 +21,11 @@ import { describe, expect, it } from 'vitest'
 import { authoringTools, type AuthoringDeps } from '../src/authoring.ts'
 import { DEFAULT_SECTION } from '../src/defaults.ts'
 import { readSection } from '../src/normalize.ts'
-import type { ToolDefinitionLike } from '../src/context-types.ts'
+import type { AgentLike, HostContext, ToolDefinitionLike } from '../src/context-types.ts'
+import { applyChildPolicy, subagentContext } from '../src/subagent-compat.ts'
+import { planSubagent } from '../src/implement.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 
 /**
  * 决定「这台机器上有没有 DSH」的最小包集。
@@ -50,7 +54,7 @@ function resolveDshRoot(): string | undefined {
   const fromEnv = process.env.DSH_PROFILE_NODE_MODULES
   const candidates = fromEnv !== undefined && fromEnv !== ''
     ? [fromEnv]
-    : [join(homedir(), '.dsh', 'profiles', 'node_modules')]
+    : [join(homedir(), '.dsh', 'profiles', 'node_modules'), join(homedir(), '.dsh', 'profiles', 'web', 'node_modules')]
   for (const root of candidates) {
     if (CORE_PACKAGES.every(name => existsSync(join(root, ...name.split('/'), 'package.json')))) {
       return root
@@ -179,6 +183,129 @@ suite('DSH 运行时兼容：工具登记表', () => {
         expect(typeof parameters.properties).toBe('object')
       }
       for (const dispose of disposers) dispose()
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('新版真实 apply 拒绝旧字段，适配后 spawn/fork 可继续工具可登记并执行', async () => {
+    const runtime = await boot()
+    const directory = await mkdtemp(join(tmpdir(), 'ob-agent-real-'))
+    const previous = process.env.DSH_OB_AGENT_POLICY_DIR
+    process.env.DSH_OB_AGENT_POLICY_DIR = directory
+    const module = await loadDsh('@deepseek-ai/dsh-tool-subagent')
+    const apply = module.apply as (ctx: unknown, config: unknown, session?: unknown) => Promise<void>
+    const starts: Record<string, unknown>[] = []
+    const subagents = {
+      getProvider: (name: string) => ({ name, inheritsParentContext: name === 'fork', capabilities: { depthLimit: true, agentOptions: true, agentPreset: name === 'spawn' }, prepareContinuable: () => Promise.resolve({}) }),
+      resolveMaxDepth: (n: number) => n,
+      startActivation: async (spec: Record<string, unknown>) => {
+        starts.push(spec)
+        return { childId: spec.childId, result: Promise.resolve({ output: [{ type: 'text', text: '真实装配结果' }], stopReason: 'completed' }), dispose: async () => undefined }
+      },
+    }
+    const parent = {
+      id: 'parent-real', options: {},
+      session: { id: 'parent-real', header: { id: 'parent-real' }, requestHeader: () => undefined },
+    }
+    try {
+      await expect(apply(runtime.scopeCtx, { provider: 'spawn', persona: 'old' })).rejects.toThrow('persona is no longer supported')
+      await expect(apply(runtime.scopeCtx, { provider: 'spawn', toolFilter: { allow: ['read'] } })).rejects.toThrow('toolFilter is no longer supported')
+      for (const provider of ['spawn', 'fork'] as const) {
+        for (const mode of ['continuable'] as const) {
+          const result = planSubagent({ ...DEFAULT_SECTION.entries.find(e => e.id === 'general')!, id: `${provider}_session`, provider }, mode, DEFAULT_SECTION, { visibleTool: () => true })
+          if (!result.ok || result.plan.kind !== 'subagent') throw new Error('plan failed')
+          await new Promise<void>((resolve, reject) => {
+          ;(runtime.scopeCtx as unknown as HostContext).inject(['tools', 'systemPrompt'], nativeCtx => {
+          const shim = new Proxy(nativeCtx, {
+            get(target, prop) {
+              if (prop === 'subagents') return subagents
+              if (prop === 'sessionProjections') return { register: () => () => undefined }
+              if (prop === 'get') return (name: string) => name === 'subagents' ? subagents : name === 'sessionProjections' ? { register: () => () => undefined } : target.get(name)
+              return Reflect.get(target, prop, target)
+            },
+          })
+          void apply(subagentContext(shim, result.plan), result.plan.config, parent.session).then(resolve, reject)
+          })
+          })
+          const tool = runtime.scopeCtx.tools.get(result.plan.toolName, runtime.agentKey) as unknown as ToolDefinitionLike
+          expect(tool).toBeDefined()
+          const value = await tool.execute({ description: '兼容测试', prompt: '无需调用模型' }, { agent: parent as unknown as AgentLike, signal: new AbortController().signal })
+          expect((value as { kind: string }).kind).toBe('activation')
+        }
+      }
+      expect(starts).toHaveLength(2)
+      expect(starts.every(spec => typeof spec.childId === 'string' && spec.childId.startsWith('obagent-'))).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_OB_AGENT_POLICY_DIR
+      else process.env.DSH_OB_AGENT_POLICY_DIR = previous
+      await runtime.dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('真实作用域中身份覆盖、只读隐藏与自有层/新增工具拒绝同时成立', async () => {
+    const runtime = await boot()
+    try {
+      runtime.rootCtx.tools.register(definitionOf('read'))
+      runtime.rootCtx.tools.register(definitionOf('write'))
+      const childId = 'obagent-00000000-0000-4000-8000-000000000002'
+      const agent = {
+        id: childId, session: { header: { origin: 'subagent', parentSession: 'parent' } }, ctx: runtime.scopeCtx,
+      } as unknown as AgentLike
+      await applyChildPolicy(agent, { version: 1, childId, parentId: 'parent', mode: 'continuable', allow: ['read'], identityPrompt: '真实测试身份' })
+      expect(runtime.scopeCtx.tools.schemas(runtime.agentKey).map(s => s.name)).toEqual(['read'])
+      runtime.scopeCtx.tools.register(definitionOf('new_write'))
+      const tools = runtime.scopeCtx.tools as unknown as { execute(exec: unknown): Promise<{ isError: boolean; content: unknown }> }
+      const execution = { callId: 'compat-call', name: 'new_write', arguments: {}, agent: runtime.agentKey, signal: new AbortController().signal }
+      const denied = await tools.execute(execution)
+      expect(denied.isError).toBe(true)
+      expect(JSON.stringify(denied.content)).toContain('只读')
+      const prompt = runtime.rootCtx.systemPrompt as { assemble(context: unknown): unknown }
+      const assembly = await prompt.assemble({ scope: runtime.agentKey })
+      expect(JSON.stringify(assembly)).toContain('真实测试身份')
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it.skipIf(!existsSync(join(homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-ob-agent', 'lib', 'index.js')))(
+    '真实安装副本生命周期能等待装配，并在 provider 晚就绪后自动重挂', async () => {
+    const runtime = await boot()
+    const ctx = runtime.rootCtx as unknown as {
+      provide(name: string, value: unknown): void
+      emit(event: string, ...args: unknown[]): void
+      serial(event: string, ...args: unknown[]): Promise<void>
+    }
+    let providerReady = false
+    const subagents = {
+      getProvider: (name: string) => providerReady ? { name, inheritsParentContext: false, capabilities: { depthLimit: true, agentOptions: true }, prepareContinuable: () => Promise.resolve({}) } : undefined,
+      resolveMaxDepth: (n: number) => n,
+    }
+    const agent = Object.assign(runtime.agentKey, { ctx: runtime.scopeCtx, session: { id: 'compat-agent', header: { id: 'compat-agent' } } })
+    const section = readSection({ ...DEFAULT_SECTION, sessions: { 'compat-agent': { enabled: true, selected: ['general', 'workflow', 'ralph', 'agents_control', 'agents_list'] } }, autoEnableControlWithContinuable: false })
+    const config = Object.fromEntries(Object.entries(section).map(([key, value]) => [key, { get: () => value }]))
+    const builtPath = join(homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-ob-agent', 'lib', 'index.js')
+    const plugin = await import(pathToFileURL(builtPath).href)
+    try {
+      ctx.provide('subagents', subagents)
+      ctx.provide('sessionProjections', { register: () => () => undefined })
+      ctx.provide('agents', { list: () => [agent] })
+      ctx.provide('workflowEngine', { start: () => { throw new Error('仅验证装配，不执行工作流') } })
+      plugin.apply(runtime.rootCtx, config)
+      await ctx.serial('agent/created', { agent })
+      expect(runtime.scopeCtx.tools.get('subagent_general_session', runtime.agentKey)).toBeUndefined()
+      providerReady = true
+      ctx.emit('subagent/provider-added', subagents.getProvider('spawn'))
+      // 事件调度是异步队列，限定等待时间，不能把实际失败降级成跳过。
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        if (runtime.scopeCtx.tools.get('subagent_general_session', runtime.agentKey) !== undefined) break
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+      expect(runtime.scopeCtx.tools.get('subagent_general_session', runtime.agentKey)).toBeDefined()
+      expect(runtime.scopeCtx.tools.get('workflow', runtime.agentKey)).toBeDefined()
+      expect(runtime.scopeCtx.tools.get('ralph', runtime.agentKey)).toBeDefined()
+      for (const name of ['send_message', 'interrupt_agent', 'list_agents']) expect(runtime.scopeCtx.tools.get(name, runtime.agentKey)).toBeDefined()
     } finally {
       await runtime.dispose()
     }

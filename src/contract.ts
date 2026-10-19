@@ -19,8 +19,8 @@ export type EntryKind = 'subagent' | 'native'
 /** 条目来源：内置、用户手建、模型自建（模型只能改自己建的）。 */
 export type EntrySource = 'builtin' | 'user' | 'model'
 
-/** 子代理运行模式：一次性 / 可继续对话。 */
-export type EntryMode = 'one-shot' | 'continuable'
+/** 新建子代理只支持可继续对话；一次性仅在历史 descriptor 读取层保留。 */
+export type EntryMode = 'continuable'
 
 /** 权限档：只读（文件读取类工具白名单）/ 完全。 */
 export type EntryPermission = 'readonly' | 'full'
@@ -61,7 +61,7 @@ export interface ObAgentEntry {
   readonly whenPrompt: string
   /** ② 给子代理：身份提示词（仅 subagent 条目）。 */
   readonly identityPrompt?: string
-  /** 一次性 / 可继续对话，可多选；多选时生成两个工具。 */
+  /** 子代理固定为 continuable；保留数组形状以兼容历史设置。 */
   readonly modes: readonly EntryMode[]
   readonly provider: SubagentProviderName
   readonly model?: ObAgentModel
@@ -153,8 +153,8 @@ export const ENTRY_ID_PATTERN = /^[a-z][a-z0-9_]{1,23}$/
 export const VARIABLE_PATTERN = /\{\{([a-z][a-z0-9_]*)\}\}/g
 
 /** 由条目标识与运行模式派生工具名。 */
-export function subagentToolName(id: string, mode: EntryMode): string {
-  return mode === 'continuable' ? `subagent_${id}_session` : `subagent_${id}`
+export function subagentToolName(id: string, _mode: EntryMode): string {
+  return `subagent_${id}_session`
 }
 
 /**

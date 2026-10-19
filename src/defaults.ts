@@ -76,7 +76,7 @@ const CODE_REVIEW: ObAgentEntry = {
     '控制成本：优先使用已有检查结果，不重复运行昂贵测试；只有验证具体高风险问题确有必要时才执行最小命令。',
     '不要要求为了同一问题反复审查；修复建议必须权衡收益与改动成本，信息不足时如实说明，不臆造问题。',
   ].join('\n'),
-  modes: ['one-shot'],
+  modes: ['continuable'],
   provider: 'spawn',
   model: { provider: 'opencode-go', model: 'hy4-preview' },
   permission: 'full',
@@ -93,7 +93,7 @@ const GENERAL: ObAgentEntry = {
   description: '独立上下文的通用委派，可继续对话',
   whenPrompt:
     '当一项子任务需要大量独立探索、会污染主会话上下文，或可以并行推进时使用；'
-    + '需要多轮追问时用这个可继续对话的子代理，而不是一次性子代理。',
+    + '返回持久 id，可用 send_message 追加提问或调整方向。',
   identityPrompt: '你是被主会话委派的通用子代理。专注于被交付的这一件事，做完即返回结论。',
   modes: ['continuable'],
   provider: 'spawn',
@@ -253,7 +253,7 @@ export const SECTION_PARALLEL = '并行：相互独立的 Agent 任务应在同�
 
 /** 可继续对话子代理的续话约定。 */
 export const SECTION_CONTINUABLE =
-  '可继续对话的子代理会返回持久 id，之后可用 send_message 继续对话；一次性子代理直接返回结果。'
+  '子代理会立即返回持久 id，完成后由宿主通知；之后可用 send_message 继续对话。'
 
 /** 新工具可见性时序说明（模型自建条目后必须知道）。 */
 export const SECTION_NEW_TOOL = '新建的 Agent 工具在下一轮请求才会出现在你的工具清单里。'

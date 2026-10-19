@@ -161,8 +161,7 @@ export function createGateMatcher(section: ObAgentSection): GateMatcher {
 
 function modeLabel(modes: readonly EntryMode[]): string {
   if (modes.length === 0) return '原生工具'
-  if (modes.length === 1) return modes[0] === 'continuable' ? '可继续对话' : '一次性'
-  return '一次性或可继续对话'
+  return '可继续对话'
 }
 
 /** 一条已启用条目的单行描述（子代理条目含模式、权限、上下文与模型）。 */

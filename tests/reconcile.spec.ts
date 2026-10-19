@@ -34,7 +34,7 @@ const entry: ObAgentEntry = {
   description: '',
   whenPrompt: 'a',
   identityPrompt: 'b',
-  modes: ['one-shot'],
+  modes: ['continuable'],
   provider: 'spawn',
   permission: 'full',
 }
@@ -42,13 +42,11 @@ const entry: ObAgentEntry = {
 const subagentPlan = (patch: Partial<Extract<InstallPlan, { kind: 'subagent' }>> = {}): InstallPlan => ({
   kind: 'subagent',
   entry,
-  mode: 'one-shot',
+  mode: 'continuable',
   toolName: 'subagent_demo',
   config: {
     provider: 'spawn',
     toolName: 'subagent_demo',
-    backgroundMode: 'one-shot',
-    enableRunInBackground: true,
     maxDepth: 3,
   },
   ...patch,
@@ -65,7 +63,7 @@ const nativePlan = (patch: Partial<Extract<InstallPlan, { kind: 'native' }>> = {
 
 describe('keyOf / fingerprintOf', () => {
   it('安装键按条目与模式区分', () => {
-    expect(keyOf(subagentPlan())).toBe('sub:demo:one-shot')
+    expect(keyOf(subagentPlan())).toBe('sub:demo:continuable')
     expect(keyOf(nativePlan())).toBe('nat:demo')
   })
 
@@ -79,8 +77,6 @@ describe('keyOf / fingerprintOf', () => {
       config: {
         provider: 'fork',
         toolName: 'subagent_demo',
-        backgroundMode: 'one-shot',
-        enableRunInBackground: true,
         maxDepth: 3,
       },
     })
@@ -473,14 +469,14 @@ describe('条目可用性判定（能力清单只列真的装上了的条目）'
 
   it('安装键与 keyOf 同形：原生一个键，子代理按模式派生', () => {
     expect(keysOfEntry(native('workflow'))).toEqual(['nat:workflow'])
-    const dual: ObAgentEntry = { ...entry, id: 'demo', modes: ['one-shot', 'continuable'] }
-    expect(keysOfEntry(dual)).toEqual(['sub:demo:one-shot', 'sub:demo:continuable'])
+    const dual: ObAgentEntry = { ...entry, id: 'demo', modes: ['continuable'] }
+    expect(keysOfEntry(dual)).toEqual(['sub:demo:continuable'])
   })
 
   it('只有全部键都不可用才判为不可用（双模式装上一个就算可用）', () => {
-    const dual: ObAgentEntry = { ...entry, id: 'demo', modes: ['one-shot', 'continuable'] }
+    const dual: ObAgentEntry = { ...entry, id: 'demo', modes: ['continuable'] }
     expect(availabilityOf(new Set(['sub:demo:continuable']))(dual)).toBe(true)
-    expect(availabilityOf(new Set(['sub:demo:one-shot']))(dual)).toBe(true)
+    expect(availabilityOf(new Set(['sub:demo:one-shot']))(dual)).toBe(false)
     expect(availabilityOf(new Set(['nat:workflow']))(dual)).toBe(false)
     expect(availabilityOf(new Set())(dual)).toBe(false)
   })

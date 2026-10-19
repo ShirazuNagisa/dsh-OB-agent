@@ -36,10 +36,7 @@ export interface ObAgentDockProps extends ObAgentDockInjected {
 
 /** 运行模式标签的文案与色调。 */
 function modeTag(entry: ObAgentEntry, t: ObAgentDockProps['t']): { text: string; tone: TagTone } {
-  if (entry.modes.length > 1) return { text: t('mode.mixed'), tone: 'neutral' }
-  return entry.modes[0] === 'continuable'
-    ? { text: t('mode.continuable'), tone: 'info' }
-    : { text: t('mode.one-shot'), tone: 'quiet' }
+  return { text: t('mode.continuable'), tone: 'info' }
 }
 
 /**

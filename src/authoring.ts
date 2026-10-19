@@ -91,8 +91,8 @@ const CREATE_PARAMETERS: Record<string, unknown> = {
   description: { type: 'string', description: '一句话描述，用于界面展示。' },
   modes: {
     type: 'array',
-    items: { type: 'string' },
-    description: '运行模式：one-shot（一次性）与/或 continuable（可继续对话）；默认 one-shot。',
+    items: { type: 'string', enum: ['continuable'] },
+    description: '只支持 continuable（可继续对话）；省略时使用该值。旧一次性模式已移除。',
   },
   provider: { type: 'string', description: '子代理后端：spawn（全新上下文，默认）或 fork（继承已完成轮次）。' },
   permission: { type: 'string', description: '权限档：full（完全，默认）或 readonly（只能读文件，不能运行命令）。' },
@@ -162,8 +162,8 @@ export function entryFromArgs(args: Record<string, unknown>, base?: ObAgentEntry
   const rawModes = Array.isArray(args.modes)
     ? args.modes.filter((mode): mode is string => typeof mode === 'string')
     : undefined
-  const modes: EntryMode[] = (rawModes ?? base?.modes ?? ['one-shot'])
-    .filter((mode): mode is EntryMode => mode === 'one-shot' || mode === 'continuable')
+  if (rawModes !== undefined && rawModes.some(mode => mode !== 'continuable')) return '运行模式只支持 continuable，DSH 已移除新建一次性子代理'
+  const modes: EntryMode[] = ['continuable']
   const provider: SubagentProviderName = args.provider === 'fork' || args.provider === 'spawn'
     ? args.provider
     : (base?.provider ?? 'spawn')

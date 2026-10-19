@@ -26,15 +26,13 @@ export interface SubagentInstallPlan {
   readonly entry: ObAgentEntry
   readonly mode: EntryMode
   readonly toolName: string
+  readonly identityPrompt?: string
+  readonly readOnlyAllow?: readonly string[]
   readonly config: {
     readonly provider: string
     readonly toolName: string
-    readonly backgroundMode: EntryMode
-    readonly enableRunInBackground: boolean
     readonly maxDepth: number
     readonly agentOptions?: { provider: string; model: string; reasoningEffort?: string }
-    readonly persona?: string
-    readonly toolFilter?: { allow: readonly string[] }
   }
 }
 
@@ -81,15 +79,16 @@ export function effectiveReadOnly(
 export function planSubagent(
   entry: ObAgentEntry,
   mode: EntryMode,
-  section: Pick<ObAgentSection, 'readOnlyTools'>,
+  section: Pick<ObAgentSection, 'readOnlyTools' | 'childReplyToParent'>,
   context: PlanContext,
 ): PlanResult {
+  if (mode !== 'continuable') return { ok: false, reason: 'DSH 已移除新建一次性子代理，仅支持 continuable' }
   const toolName = subagentToolName(entry.id, mode)
-  let toolFilter: { allow: readonly string[] } | undefined
+  let readOnlyAllow: readonly string[] | undefined
   if (entry.permission === 'readonly') {
     const allow = effectiveReadOnly(entry, section, context)
     if (allow.length === 0) return { ok: false, reason: UNAVAILABLE_READONLY }
-    toolFilter = { allow }
+    readOnlyAllow = section.childReplyToParent ? [...new Set([...allow, CHILD_REPLY_TOOL])] : allow
   }
   return {
     ok: true,
@@ -98,11 +97,11 @@ export function planSubagent(
       entry,
       mode,
       toolName,
+      ...(entry.identityPrompt !== undefined ? { identityPrompt: entry.identityPrompt } : {}),
+      ...(readOnlyAllow !== undefined ? { readOnlyAllow } : {}),
       config: {
         provider: entry.provider,
         toolName,
-        backgroundMode: mode,
-        enableRunInBackground: true,
         maxDepth: 3,
         ...(entry.model !== undefined
           ? {
@@ -113,8 +112,6 @@ export function planSubagent(
               },
             }
           : {}),
-        ...(entry.identityPrompt !== undefined ? { persona: entry.identityPrompt } : {}),
-        ...(toolFilter !== undefined ? { toolFilter } : {}),
       },
     },
   }

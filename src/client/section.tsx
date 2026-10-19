@@ -23,7 +23,6 @@ import {
 import {
   ENTRY_LIMITS,
   subagentToolName,
-  type EntryMode,
   type ObAgentEntry,
   type ObAgentSection as ObAgentSectionValue,
 } from '../contract.ts'
@@ -206,7 +205,7 @@ function newEntry(t: ObAgentSectionProps['t']): ObAgentEntry {
     description: '',
     whenPrompt: t('settings.entry.newWhen'),
     identityPrompt: t('settings.entry.newIdentity'),
-    modes: ['one-shot'],
+    modes: ['continuable'],
     provider: 'spawn',
     permission: 'full',
   }
@@ -394,24 +393,7 @@ function EntryCard(props: {
           />
           <div className="dsh_obAgent_fields">
             <Field label={t('settings.entry.modes')} desc={t('settings.entry.modesDesc')}>
-              <span className="dsh_obAgent_fields">
-                {(['one-shot', 'continuable'] as const).map((mode: EntryMode) => (
-                  <label key={mode} className="dsh_obAgent_checkRow">
-                    <input
-                      type="checkbox"
-                      checked={entry.modes.includes(mode)}
-                      disabled={props.disabled}
-                      onChange={(event) => {
-                        const modes = event.target.checked
-                          ? [...entry.modes, mode].filter((item, i, all) => all.indexOf(item) === i)
-                          : entry.modes.filter(item => item !== mode)
-                        props.onEdit({ ...entry, modes })
-                      }}
-                    />
-                    <span>{mode === 'one-shot' ? t('mode.one-shot') : t('mode.continuable')}</span>
-                  </label>
-                ))}
-              </span>
+              <Tag tone="info">{t('mode.continuable')}</Tag>
             </Field>
             <SelectField
               label={t('settings.entry.provider')}

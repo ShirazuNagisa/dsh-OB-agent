@@ -15,6 +15,7 @@ export interface Disposer {
 /** cordis 注入出的 fiber（可精确释放该注入带来的全部注册）。 */
 export interface Fiber {
   dispose(): Promise<void> | void
+  await?(): Promise<void>
 }
 
 /** 主机侧 agent：会话、作用域 Context 与稳定 id。 */
@@ -67,6 +68,7 @@ export interface AgentRegistryLike {
 export interface ToolExecLike {
   readonly name?: string
   readonly agent?: AgentLike
+  readonly arguments?: Readonly<Record<string, unknown>>
   readonly signal?: AbortSignal
 }
 

@@ -63,6 +63,7 @@ import {
 } from './defaults.ts'
 import { docHint } from './docpath.ts'
 import { authoringTools, type AuthoringDeps } from './authoring.ts'
+import { subagentContext } from './subagent-compat.ts'
 
 /** 本插件需要动态加载的 DSH 实现包；字面量说明符保证 esbuild 保持外部化。 */
 const MODULE_LOADERS = {
@@ -76,7 +77,9 @@ const MODULE_LOADERS = {
 export type ModuleName = keyof typeof MODULE_LOADERS
 
 interface LoadedModule {
-  apply(ctx: unknown, config?: unknown): void
+  readonly inject?: readonly string[]
+  readonly Config?: (value: unknown) => unknown
+  apply(ctx: unknown, config?: unknown, session?: unknown): void | Promise<void>
 }
 
 const loadedModules = new Map<ModuleName, LoadedModule>()
@@ -304,7 +307,7 @@ export function keyOf(plan: InstallPlan): string {
 /** 由计划构造指纹（配置变化 → 指纹变化 → 重装）。 */
 export function fingerprintOf(plan: InstallPlan): string {
   return plan.kind === 'subagent'
-    ? `sub|${plan.toolName}|${JSON.stringify(plan.config)}`
+    ? `sub|${plan.toolName}|${plan.mode}|${JSON.stringify(plan.config)}|${JSON.stringify([plan.identityPrompt, plan.readOnlyAllow])}`
     : `nat|${plan.impl}|${plan.action}|${plan.toolNames.join(',')}`
 }
 
@@ -535,27 +538,40 @@ export function registerSelectedTools(
 }
 
 /** 安装一个计划；返回释放器或不可用原因。 */
-function installPlan(
+async function installPlan(
   deps: ReconcileDeps,
   agent: AgentLike,
   plan: InstallPlan,
   authoring: AuthoringDeps | undefined,
-): { dispose: () => void | Promise<void> } | { reason: string } {
+): Promise<{ dispose: () => void | Promise<void> } | { reason: string }> {
   if (plan.kind === 'subagent') {
     const module = moduleOf('tool-subagent')
     if (module === undefined) return { reason: moduleFailure('tool-subagent') ?? '委派工具包不可用' }
     // 注入面必须与 dsh-tool-subagent 自己的 scoped 装配一致（它读 subagents 提供方、
     // 注册 systemPrompt 段、往 tools 注册工具），少一个都会让 apply 内部拿不到服务。
-    const fiber = agent.ctx.inject(['tools', 'subagents', 'systemPrompt'], (runtimeCtx) => {
+    // 新版 apply 是异步函数，必须等待并在注入回调内接住拒绝，不能让它成为 fatal load failure。
+    let failure: string | undefined
+    let activated = false
+    const fiber = agent.ctx.inject(['tools', 'subagents', 'systemPrompt', 'sessionProjections'], async (runtimeCtx) => {
       try {
-        module.apply(runtimeCtx, plan.config)
+        await module.apply(subagentContext(runtimeCtx, plan), plan.config, agent.session)
+        activated = true
       } catch (error) {
-        deps.ctx.logger.warn(
-          `dsh-ob-agent: 装配子代理工具 ${plan.toolName} 失败：${error instanceof Error ? error.message : String(error)}`,
-        )
+        failure = error instanceof Error ? error.message : String(error)
       }
     })
-    return { dispose: () => fiber.dispose() }
+    try {
+      if (fiber.await === undefined) throw new Error('当前 DSH 不支持可等待的子代理装配')
+      await fiber.await()
+      if (failure !== undefined) throw new Error(failure)
+      if (!activated) throw new Error('子代理装配缺少所需服务，工具尚未激活')
+      const tools = serviceOf<ToolRuntimeLike>(agent.ctx, 'tools')
+      if (tools?.get(plan.toolName, agent) === undefined) throw new Error(`提供方 ${plan.config.provider} 未提供工具 ${plan.toolName}`)
+      return { dispose: () => fiber.dispose() }
+    } catch (error) {
+      await fiber.dispose()
+      return { reason: error instanceof Error ? error.message : String(error) }
+    }
   }
   if (plan.action === 'passthrough') return { dispose: () => undefined }
   if (plan.action === 'plugin') {
@@ -644,23 +660,31 @@ function installPlan(
     })
     return { dispose: () => fiber.dispose() }
   }
-  const fiber = agent.ctx.inject(['tools', 'subagents', 'systemPrompt'], (runtimeCtx) => {
-    if (plan.impl === 'workflow' && serviceOf<unknown>(runtimeCtx, 'workflowEngine') === undefined) {
-      deps.ctx.logger.warn(
-        'dsh-ob-agent: 缺少 workflowEngine 服务，workflow 条目本会话不可用'
-        + '（需要装配 @deepseek-ai/dsh-workflow）',
-      )
-      return
-    }
+  if ((plan.impl === 'workflow' || plan.impl === 'ralph')
+    && serviceOf<unknown>(agent.ctx, 'workflowEngine') === undefined) {
+    return { reason: '缺少 workflowEngine 服务（需要当前预设装配 @deepseek-ai/dsh-workflow）' }
+  }
+  let failure: string | undefined
+  let activated = false
+  // 原生模块自带 inject 和 Config：必须按其声明注入、补默认值，不能只调用 apply(undefined)。
+  const fiber = agent.ctx.inject(module.inject ?? ['tools', 'subagents', 'systemPrompt'], async runtimeCtx => {
     try {
-      module.apply(runtimeCtx, plan.impl === 'ralph' ? { subagentProvider: 'spawn' } : undefined)
+      const raw = plan.impl === 'ralph' ? { subagentProvider: 'spawn' } : {}
+      await module.apply(runtimeCtx, module.Config?.(raw) ?? raw)
+      activated = true
     } catch (error) {
-      deps.ctx.logger.warn(
-        `dsh-ob-agent: 装配 ${plan.impl} 失败：${error instanceof Error ? error.message : String(error)}`,
-      )
+      failure = error instanceof Error ? error.message : String(error)
     }
   })
-  return { dispose: () => fiber.dispose() }
+  try {
+    if (fiber.await !== undefined) await fiber.await()
+    if (failure !== undefined) throw new Error(failure)
+    if (!activated) throw new Error(`装配 ${plan.impl} 缺少所需服务`)
+    return { dispose: () => fiber.dispose() }
+  } catch (error) {
+    await fiber.dispose()
+    return { reason: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /** 协调一个 agent（可重入，重入折叠为一次尾随重算）。 */
@@ -829,7 +853,7 @@ async function reconcileOnce(deps: ReconcileDeps, agent: AgentLike, state: Agent
   }
   for (const [key, plan] of usable) {
     if (state.installs.has(key)) continue
-    const installed = installPlan(deps, agent, plan, authoring)
+    const installed = await installPlan(deps, agent, plan, authoring)
     if ('reason' in installed) {
       // 装配失败 = 该条目本会话其实不可用：把它从能力清单里摘掉，别让模型去调用一个
       // 根本注册不上的工具名。

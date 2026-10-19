@@ -63,7 +63,6 @@ export function readModelGuide(value: unknown): ObAgentModelGuide {
   return { inject: raw.inject === 'inline' || raw.inject === 'off' ? raw.inject : DEFAULT_SECTION.modelGuide.inject }
 }
 
-const MODES: readonly EntryMode[] = ['one-shot', 'continuable']
 const IMPLS: readonly NativeImpl[] = ['workflow', 'ralph', 'control', 'list-agents', 'subagent-preset', 'authoring']
 
 /** 归一化单条条目；结构不成立时返回 undefined（调用方告警并跳过）。 */
@@ -76,7 +75,8 @@ export function normalizeEntry(value: unknown): ObAgentEntry | undefined {
   if (name.trim() === '') return undefined
   const kind = raw.kind === 'native' ? 'native' : 'subagent'
   const source = raw.source === 'builtin' || raw.source === 'user' ? raw.source : 'model'
-  const modes = (readStrings(raw.modes) ?? []).filter((mode): mode is EntryMode => (MODES as readonly string[]).includes(mode))
+  // 旧 one-shot / 双模式条目只迁移模式，不覆盖用户身份、模型、权限或会话勾选。
+  const modes: EntryMode[] = kind === 'subagent' ? ['continuable'] : []
   const modelRaw = raw.model as Record<string, unknown> | undefined
   const model = modelRaw !== undefined && typeof modelRaw.provider === 'string' && typeof modelRaw.model === 'string'
     ? {

@@ -17,16 +17,13 @@ declare module '@deepseek-ai/dsh-tool-subagent' {
   export interface SubagentToolConfig {
     provider: string
     toolName?: string
-    enableRunInBackground?: boolean
-    backgroundMode?: 'one-shot' | 'continuable'
     agentOptions?: { provider?: string; model?: string; reasoningEffort?: string }
-    persona?: string
-    toolFilter?: { allow?: string[]; deny?: string[] }
+    agentPreset?: string
     maxDepth?: number | 'provider-managed'
   }
   export const name: string
   export const inject: string[]
-  export function apply(ctx: unknown, config: SubagentToolConfig): void
+  export function apply(ctx: unknown, config: SubagentToolConfig, session?: unknown): Promise<void>
 }
 
 /** 子代理续话 / 中止工具（`send_message`、`interrupt_agent`）。 */

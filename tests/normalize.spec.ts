@@ -25,7 +25,7 @@ const validEntry: ObAgentEntry = {
   description: '',
   whenPrompt: '需要时调用',
   identityPrompt: '你是演示子代理',
-  modes: ['one-shot'],
+  modes: ['continuable'],
   provider: 'spawn',
   permission: 'full',
 }
@@ -62,7 +62,16 @@ describe('readSection', () => {
   it('未知的 impl 与非法模式被剔除', () => {
     const entry = normalizeEntry({ ...validEntry, impl: 'nope', modes: ['one-shot', 'weird'] })
     expect(entry?.impl).toBeUndefined()
-    expect(entry?.modes).toEqual(['one-shot'])
+    expect(entry?.modes).toEqual(['continuable'])
+  })
+
+  it('旧一次性和双模式条目只迁移模式，模型/身份/权限/勾选保持不变', () => {
+    for (const modes of [['one-shot'], ['one-shot', 'continuable']]) {
+      const raw = { ...validEntry, modes, model: { provider: 'custom', model: 'm' }, permission: 'readonly' }
+      const section = readSection({ ...DEFAULT_SECTION, entries: [raw], sessions: { s1: { enabled: true, selected: ['demo'] } } })
+      expect(section.entries[0]).toEqual({ ...raw, modes: ['continuable'] })
+      expect(section.sessions.s1).toEqual({ enabled: true, selected: ['demo'] })
+    }
   })
 
   it('来源缺省视为模型自建（写入方必须显式声明其它来源）', () => {

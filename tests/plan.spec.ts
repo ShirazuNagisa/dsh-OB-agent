@@ -83,7 +83,7 @@ describe('resolveActive', () => {
   it('子代理条目的工具名按模式派生', () => {
     const section = sectionOf({ sessions: { s1: { enabled: true, selected: ['code_review'] } } })
     const active = resolveActive(section, 's1')
-    expect(active[0]?.toolNames).toEqual(['subagent_code_review'])
+    expect(active[0]?.toolNames).toEqual(['subagent_code_review_session'])
   })
 })
 
@@ -93,7 +93,7 @@ describe('createGateMatcher', () => {
   it('按前缀拦下全部委派工具（含未列名的预设子代理）', () => {
     expect(matcher.denies('subagent')).toBe(true)
     expect(matcher.denies('subagent_hy4')).toBe(true)
-    expect(matcher.denies('subagent_code_review_session')).toBe(true)
+    expect(matcher.denies('subagent_code_review_session_session')).toBe(true)
   })
 
   it('按精确名拦下续话与编排工具', () => {
@@ -175,9 +175,9 @@ describe('renderSectionText', () => {
   it('勾选后列出工具名、权限与调用时机，并附并行约定', () => {
     const section = sectionOf({ sessions: { s1: { enabled: true, selected: ['code_review'] } } })
     const text = renderSectionText(section, 's1', 'doc-path')
-    expect(text).toContain('`subagent_code_review`')
+    expect(text).toContain('`subagent_code_review_session`')
     expect(text).toContain('代码审查')
-    expect(text).toContain('一次性')
+    expect(text).toContain('可继续对话')
     expect(text).toContain('完全权限')
     expect(text).toContain('并行：')
     expect(text).not.toContain('agent_create')
@@ -220,7 +220,7 @@ describe('renderSubagentRoster（回答「有几个子代理」的能力清单�
     expect(text).not.toBe(unselected)
   })
 
-  it('双模式条目按工具数计数（数字与列出的工具名对得上）', () => {
+  it('旧双模式条目迁移为单个可继续对话工具', () => {
     // 出厂条目都是单模式，这里自建一条双模式条目（一次派生两个工具名）。
     const dual = {
       id: 'dual',
@@ -241,18 +241,18 @@ describe('renderSubagentRoster（回答「有几个子代理」的能力清单�
       sessions: { s1: { enabled: true, selected: ['dual'] } },
     })
     const text = renderSubagentRoster(section, 's1')
-    expect(text).toContain('`subagent_dual`')
+    expect(text).not.toContain('`subagent_dual`')
     expect(text).toContain('`subagent_dual_session`')
-    expect(text).toContain('2 个')
+    expect(text).toContain('1 个')
   })
 
   it('勾选后列出工具名、模式、权限与模型，且不混入未勾选条目', () => {
     const section = sectionOf({ sessions: { s1: { enabled: true, selected: ['code_review'] } } })
     const text = renderSubagentRoster(section, 's1')
     expect(text).toContain('1 个')
-    expect(text).toContain('`subagent_code_review`')
+    expect(text).toContain('`subagent_code_review_session`')
     expect(text).toContain('代码审查')
-    expect(text).toContain('一次性')
+    expect(text).toContain('可继续对话')
     expect(text).toContain('完全权限')
     expect(text).toContain('全新上下文')
     expect(text).not.toContain('通用子代理')
@@ -275,7 +275,7 @@ describe('renderSubagentRoster（回答「有几个子代理」的能力清单�
         s2: { enabled: true, selected: ['general'] },
       },
     })
-    expect(renderSubagentRoster(section, 's1')).toContain('`subagent_code_review`')
+    expect(renderSubagentRoster(section, 's1')).toContain('`subagent_code_review_session`')
     expect(renderSubagentRoster(section, 's1')).not.toContain('`subagent_general_session`')
     expect(renderSubagentRoster(section, 's2')).toContain('`subagent_general_session`')
   })

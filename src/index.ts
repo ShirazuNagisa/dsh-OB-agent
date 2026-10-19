@@ -15,6 +15,7 @@ import { readSection } from './normalize.ts'
 import { Config, type PluginConfig } from './settings.ts'
 import { disposeAgent, reconcileAgent, type ReconcileDeps } from './reconcile.ts'
 import type { ObAgentSection } from './contract.ts'
+import { installChildPolicies } from './subagent-compat.ts'
 
 /** Cordis 插件名（Loader 入口与客户端 bundle id）。 */
 export const name = 'dsh-ob-agent'
@@ -30,6 +31,8 @@ export { Config }
  * @param ctx - 主机 cordis 上下文。
  */
 export function apply(ctx: HostContext, config: PluginConfig): void {
+  // 安全策略必须先于异步协调器完成，读取失败会否决插件子代理的发布。
+  installChildPolicies(ctx)
   let section: ObAgentSection = readPluginConfig(config)
   let scope: { update(patch: object): Promise<void> } | undefined
   let queued = false
@@ -108,12 +111,12 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
   })
 
   // agent 生命周期：创建即装配；销毁即释放（协调状态同时由 WeakMap 回收）。
-  ctx.on('agent/created', (payload: { agent: AgentLike }) => {
+  ctx.on('agent/created', async (payload: { agent: AgentLike }) => {
     try {
-      // 处理器必须同步返回：同步抛错会否决 agent 发布，因此这里只登记重算。
+      // 新版宿主串行等待创建监听；首个模型请求前完成工具装配。安全策略由前置监听独立否决。
       const agent = payload?.agent
       if (agent === undefined) return
-      void reconcileAgent(deps, agent).catch(error => {
+      await reconcileAgent(deps, agent).catch(error => {
         ctx.logger.warn(
           `dsh-ob-agent: 初始化 agent ${agent.id} 失败：${error instanceof Error ? error.message : String(error)}`,
         )
@@ -131,6 +134,8 @@ export function apply(ctx: HostContext, config: PluginConfig): void {
 
   // 工具集变化（预设切换、MCP 上下线、本插件自身的装配）→ 重算。幂等保证不成环。
   ctx.on('tools/change', () => schedule())
+  ctx.on('subagent/provider-added', () => schedule())
+  ctx.on('subagent/provider-removed', () => schedule())
 
   // 首次装配：已有 agent（HMR / 重新挂载）也要纳入管理。
   schedule()

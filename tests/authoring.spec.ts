@@ -63,7 +63,7 @@ describe('entryFromArgs', () => {
       name: 'x',
       whenPrompt: 'a',
       identityPrompt: 'b',
-      modes: ['continuable', 'nope'],
+      modes: ['continuable'],
       provider: 'fork',
       permission: 'readonly',
     })
@@ -73,6 +73,10 @@ describe('entryFromArgs', () => {
     expect(entry.provider).toBe('fork')
     expect(entry.permission).toBe('readonly')
     expect(entry.source).toBe('model')
+  })
+
+  it('拒绝模型继续创建已退役的一次性模式', () => {
+    expect(entryFromArgs({ id: 'demo', name: 'x', whenPrompt: 'a', identityPrompt: 'b', modes: ['one-shot'] })).toContain('只支持 continuable')
   })
 
   it('缺少 id 时返回中文原因', () => {
@@ -107,7 +111,7 @@ describe('agent_create', () => {
     expect(entries).toHaveLength(DEFAULT_SECTION.entries.length + 1)
     const created = entries.find(entry => entry.id === 'doc_writer')
     expect(created?.source).toBe('model')
-    expect(created?.modes).toEqual(['one-shot'])
+    expect(created?.modes).toEqual(['continuable'])
     expect(text).toContain('下一轮请求')
     expect(h.audits[0]).toContain('doc_writer')
   })

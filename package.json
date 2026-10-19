@@ -1,7 +1,7 @@
 {
   "name": "dsh-ob-agent",
   "description": "Unified Agent control for DeepSeek Harness: gate every agent-class tool behind one composer switch, preset subagents with per-entry persona/permission/model, and let the model author its own agents.",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -50,7 +50,7 @@
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-client-ui-primitives": "*",
     "@deepseek-ai/dsh-tool-ralph": "*",
-    "@deepseek-ai/dsh-tool-subagent": "*",
+    "@deepseek-ai/dsh-tool-subagent": ">=0.2.1-rc.2 <0.3.0",
     "@deepseek-ai/dsh-tool-subagent-control": "*",
     "@deepseek-ai/dsh-tool-workflow": "*",
     "@deepseek-ai/dsh-workflow": "*",
@@ -87,7 +87,7 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.2",
     "@types/node": "^24.0.0",
     "@types/react": "^18.3.1",
     "esbuild": "^0.25.0",
